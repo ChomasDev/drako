@@ -80,6 +80,19 @@ class CardTerminalWindow: TerminalWindow {
         reapplyCardStyle()
     }
 
+    override func makeKeyAndOrderFront(_ sender: Any?) {
+        super.makeKeyAndOrderFront(sender)
+
+        // Native tab selection can order the group out later in the same turn.
+        // Reveal it once AppKit has finished switching, unless it was closed.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isVisible,
+                  (self.tabGroup?.selectedWindow ?? self) === self else { return }
+
+            self.orderFrontRegardless()
+        }
+    }
+
     // The whole window is content; our SwiftUI titlebar handles dragging.
     override var contentLayoutRect: CGRect {
         var rect = super.contentLayoutRect

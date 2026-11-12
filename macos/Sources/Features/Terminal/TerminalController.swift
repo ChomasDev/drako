@@ -742,6 +742,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             }
         }
 
+        // Drako: closing a tab kills its sessions.
+        DrakoStore.shared.kill(surfaceTree)
+
         window.close()
     }
 
@@ -840,6 +843,12 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         guard let window = window else { return }
 
         cancelPendingInitialPresentation()
+
+        // Drako: closing a window kills the sessions of all its tabs.
+        let tabWindows = window.tabGroup?.windows ?? [window]
+        for case let controller as TerminalController in tabWindows.map(\.windowController) {
+            DrakoStore.shared.kill(controller.surfaceTree)
+        }
 
         registerUndoForCloseWindow()
 

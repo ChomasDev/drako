@@ -13,7 +13,7 @@ struct CardTitlebarView: View {
                 .frame(width: CardTheme.trafficLightsWidth - 10, height: 16)
                 .padding(.leading, 10)
 
-            HostLabel()
+            HostLabel(host: chrome.selectedHost ?? .local)
                 .padding(.trailing, 4)
 
             TabTrack(chrome: chrome)
@@ -31,22 +31,18 @@ struct CardTitlebarView: View {
 
 // MARK: Host
 
+/// The host of the selected tab: this Mac, or a remote host and whether it's reachable.
 private struct HostLabel: View {
+    let host: DrakoHost
+
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "laptopcomputer")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(CardTheme.secondaryText)
+            HostIcon(host: host, size: 13)
 
-            VStack(alignment: .leading, spacing: 0) {
-                Text(HostInfo.name)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(CardTheme.primaryText)
-                Text(HostInfo.subtitle)
-                    .font(.system(size: 10))
-                    .foregroundStyle(CardTheme.tertiaryText)
-            }
-            .lineLimit(1)
+            Text(host.name)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(CardTheme.secondaryText)
+                .lineLimit(1)
         }
         .fixedSize()
         .allowsHitTesting(false)
@@ -70,19 +66,16 @@ private struct TabTrack: View {
             }
             .fixedSize(horizontal: false, vertical: true)
 
-            TitlebarIconButton(symbol: "plus", help: "New Tab (⌘T)") {
-                chrome.newTab()
+            NewTabMenu(chrome: chrome) {
+                Image(systemName: "plus")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(CardTheme.secondaryText)
+                    .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
             }
+            .help("New Tab (⌘T)")
             .padding(.trailing, 3)
         }
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(CardTheme.track)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.05), lineWidth: 1)
-        )
         .fixedSize(horizontal: true, vertical: false)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -101,21 +94,18 @@ private struct TabPill: View {
         HStack(spacing: 6) {
             ProgramIcon(kind: pane?.kind ?? .other, size: 11)
 
+            if let host = tab.host, !host.isLocal {
+                Text(host.name)
+                    .font(.system(size: 11))
+                    .foregroundStyle(CardTheme.secondaryText)
+            }
+
             Text(pane?.shortLabel ?? "Terminal")
-                .font(.system(size: 12, weight: tab.isSelected ? .medium : .regular))
+                .font(.system(size: 12))
                 .foregroundStyle(tab.isSelected ? CardTheme.primaryText : CardTheme.secondaryText)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: 160, alignment: .leading)
-
-            if tab.panes.count > 1 {
-                Text("\(tab.panes.count)")
-                    .font(.system(size: 9, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(CardTheme.secondaryText)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(Capsule().fill(Color.white.opacity(0.08)))
-            }
 
             ZStack {
                 if canClose && hovering {
@@ -124,28 +114,21 @@ private struct TabPill: View {
                     } label: {
                         Image(systemName: "xmark")
                             .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(CardTheme.secondaryText)
+                            .foregroundStyle(CardTheme.tertiaryText)
                             .frame(width: 14, height: 14)
-                            .background(Circle().fill(Color.white.opacity(0.08)))
                     }
                     .buttonStyle(.plain)
                     .help("Close Tab")
-                } else if tab.isRunning {
-                    Circle().fill(CardTheme.running).frame(width: 5, height: 5)
                 }
             }
             .frame(width: 14, height: 14)
         }
-        .padding(.leading, 9)
+        .padding(.leading, 10)
         .padding(.trailing, 5)
         .frame(height: 26)
         .background(
             RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .fill(tab.isSelected ? CardTheme.activePill : (hovering ? CardTheme.hoverPill : .clear))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .strokeBorder(tab.isSelected ? Color.white.opacity(0.08) : .clear, lineWidth: 1)
         )
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
@@ -155,6 +138,43 @@ private struct TabPill: View {
 }
 
 // MARK: Shared pieces
+
+/// A menu of the hosts a new tab can open on; the last used one is checked.
+struct NewTabMenu<Label: View>: View {
+    @ObservedObject var chrome: CardChromeModel
+    @ViewBuilder let label: () -> Label
+
+    @ObservedObject private var drako = DrakoStore.shared
+
+    var body: some View {
+        Menu {
+            Section("New Tab On") {
+                ForEach(drako.hosts) { host in
+                    Toggle(host.name, isOn: Binding(
+                        get: { host == drako.lastHost },
+                        set: { _ in chrome.newTab(on: host) }))
+                }
+            }
+        } label: {
+            label()
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+    }
+}
+
+/// A laptop for this Mac, a server for remote hosts.
+struct HostIcon: View {
+    let host: DrakoHost
+    var size: CGFloat = 11
+
+    var body: some View {
+        Image(systemName: host.isLocal ? "laptopcomputer" : "server.rack")
+            .font(.system(size: size, weight: .medium))
+            .foregroundStyle(CardTheme.tertiaryText)
+    }
+}
 
 struct ProgramIcon: View {
     let kind: ProgramKind

@@ -393,10 +393,9 @@ class AppDelegate: NSObject,
             // is possible to have other windows in a few scenarios:
             //   - if we're opening a URL since `application(_:openFile:)` is called before this.
             //   - if we're restoring from persisted state
+            // Drako: the first windows come from the sessions still alive on each host.
             if TerminalController.all.isEmpty && derivedConfig.initialWindow {
-                undoManager.disableUndoRegistration()
-                _ = TerminalController.newWindow(ghostty)
-                undoManager.enableUndoRegistration()
+                DrakoStore.shared.restoreTabs()
             }
         }
     }
@@ -449,6 +448,15 @@ class AppDelegate: NSObject,
     /// This is called when the application is already open and someone double-clicks the icon
     /// or clicks the dock icon.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        // A card tab can still be "visible" to AppKit while its group is on
+        // another Space. Explicitly reveal the selected tab on a Dock click.
+        if let window = TerminalController.preferredParent?.window as? CardTerminalWindow {
+            let selected = window.tabGroup?.selectedWindow ?? window
+            selected.deminiaturize(nil)
+            selected.makeKeyAndOrderFront(nil)
+            return false
+        }
+
         // If we have visible windows then we allow macOS to do its default behavior
         // of focusing one of them.
         guard !flag else { return true }
@@ -488,7 +496,7 @@ class AppDelegate: NSObject,
         }
 
         // No visible windows, open a new one.
-        _ = TerminalController.newWindow(ghostty)
+        DrakoStore.shared.openTab(on: DrakoStore.shared.lastHost, from: nil)
         return false
     }
 
@@ -798,13 +806,20 @@ class AppDelegate: NSObject,
         }
     }
 
-    @objc private func ghosttyNewWindow(_ notification: Notification) {
+    @MainActor @objc private func ghosttyNewWindow(_ notification: Notification) {
         let configAny = notification.userInfo?[Ghostty.Notification.NewSurfaceConfigKey]
         let config = configAny as? Ghostty.SurfaceConfiguration
+
+        // Drako: plain new windows are drako tabs; explicit commands stay plain Ghostty.
+        guard config?.command != nil else {
+            DrakoStore.shared.openTab(on: DrakoStore.shared.lastHost, from: nil)
+            return
+        }
+
         _ = TerminalController.newWindow(ghostty, withBaseConfig: config)
     }
 
-    @objc private func ghosttyNewTab(_ notification: Notification) {
+    @MainActor @objc private func ghosttyNewTab(_ notification: Notification) {
         guard let surfaceView = notification.object as? Ghostty.SurfaceView else { return }
         guard let window = surfaceView.window else { return }
 
@@ -814,6 +829,12 @@ class AppDelegate: NSObject,
 
         let configAny = notification.userInfo?[Ghostty.Notification.NewSurfaceConfigKey]
         let config = configAny as? Ghostty.SurfaceConfiguration
+
+        // Drako: new tabs are drako tabs on a host the user picks.
+        guard config?.command != nil else {
+            DrakoStore.shared.chooseHostAndOpenTab(from: window)
+            return
+        }
 
         _ = TerminalController.newTab(ghostty, from: window, withBaseConfig: config)
     }
@@ -1045,14 +1066,16 @@ class AppDelegate: NSObject,
     }
 
     @IBAction func newWindow(_ sender: Any?) {
-        _ = TerminalController.newWindow(ghostty)
+        DrakoStore.shared.openTab(on: DrakoStore.shared.lastHost, from: nil)
     }
 
     @IBAction func newTab(_ sender: Any?) {
-        _ = TerminalController.newTab(
-            ghostty,
-            from: TerminalController.preferredParent?.window
-        )
+        guard let window = TerminalController.preferredParent?.window else {
+            DrakoStore.shared.openTab(on: DrakoStore.shared.lastHost, from: nil)
+            return
+        }
+
+        DrakoStore.shared.chooseHostAndOpenTab(from: window)
     }
 
     @IBAction func closeAllWindows(_ sender: Any?) {

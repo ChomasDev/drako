@@ -515,7 +515,10 @@ class BaseTerminalController: NSWindowController,
     /// This also updates the undo manager to support restoring this node.
     ///
     /// This does no confirmation and assumes confirmation is already done.
-    private func removeSurfaceNode(_ node: SplitTree<Ghostty.SurfaceView>.Node) {
+    func removeSurfaceNode(_ node: SplitTree<Ghostty.SurfaceView>.Node) {
+        // Drako: closing a pane kills its session.
+        DrakoStore.shared.kill(node.leaves())
+
         // Move focus if the closed surface was focused and we have a next target
         let nextFocus: Ghostty.SurfaceView? = if node.contains(
             where: { $0 == focusedSurface }
@@ -682,6 +685,11 @@ class BaseTerminalController: NSWindowController,
         case GHOSTTY_SPLIT_DIRECTION_DOWN: splitDirection = .down
         case GHOSTTY_SPLIT_DIRECTION_UP: splitDirection = .up
         default: return
+        }
+
+        if let controller = self as? TerminalController, DrakoStore.shared.host(of: controller) != nil {
+            DrakoStore.shared.openSplit(in: controller, at: oldView, direction: splitDirection)
+            return
         }
 
         newSplit(at: oldView, direction: splitDirection, baseConfig: config)

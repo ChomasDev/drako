@@ -1,7 +1,7 @@
 import SwiftUI
 
 extension EnvironmentValues {
-    /// True when the terminal view is rendered with the newterm card style.
+    /// True when the terminal view is rendered with the Drako card style.
     @Entry var cardStyle: Bool = false
 }
 
@@ -63,7 +63,9 @@ struct CardPaneView<Content: View>: View {
         }
         .overlay {
             shape
-                .strokeBorder(isFocused ? CardTheme.cardBorderFocused : CardTheme.cardBorder, lineWidth: 1)
+                .strokeBorder(
+                    isFocused ? CardTheme.cardBorderFocused : CardTheme.cardBorder,
+                    lineWidth: 1)
                 .allowsHitTesting(false)
         }
         .animation(.easeOut(duration: 0.12), value: isFocused)
@@ -74,33 +76,35 @@ private struct CardPaneHeader: View {
     @ObservedObject var surfaceView: Ghostty.SurfaceView
     let isFocused: Bool
 
+    @State private var hovering = false
+
     var body: some View {
         // Foreground process changes aren't observable, so re-sample periodically.
         TimelineView(.periodic(from: .now, by: 1)) { _ in
             let info = PaneInfo.make(surfaceView)
 
-            HStack(spacing: 7) {
-                ProgramIcon(kind: info.kind, size: 11)
-
+            HStack(spacing: 6) {
                 Text(info.program)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(isFocused ? CardTheme.primaryText : CardTheme.secondaryText)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(isFocused ? CardTheme.primaryText.opacity(0.8) : CardTheme.tertiaryText)
 
                 if let cwd = info.cwd {
                     Text(cwd)
-                        .font(.system(size: 12))
+                        .font(.system(size: 11))
                         .foregroundStyle(CardTheme.tertiaryText)
                         .truncationMode(.head)
                 }
 
-                if info.isRunning {
-                    Circle().fill(CardTheme.running).frame(width: 5, height: 5)
-                        .help("Running")
-                }
-
                 Spacer(minLength: 8)
 
-                HStack(spacing: 1) {
+                if info.isDisconnected {
+                    DisconnectedBadge {
+                        surfaceView.surfaceModel?.sendText("\r")
+                    }
+                }
+
+                // Only on hover: the header stays a quiet label otherwise.
+                HStack(spacing: 0) {
                     PaneButton(symbol: "rectangle.split.2x1", help: "Split Right") {
                         perform("new_split:right")
                     }
@@ -114,21 +118,72 @@ private struct CardPaneHeader: View {
                         perform("close_surface")
                     }
                 }
-                .opacity(isFocused ? 1 : 0.6)
+                .opacity(hovering ? 1 : 0)
+                .allowsHitTesting(hovering)
             }
             .lineLimit(1)
-            .padding(.leading, 10)
-            .padding(.trailing, 5)
+            .padding(.leading, 12)
+            .padding(.trailing, 6)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
         .onTapGesture {
             Ghostty.moveFocus(to: surfaceView)
+        }
+        .contextMenu {
+            MoveToTabMenu(surfaceView: surfaceView)
         }
     }
 
     private func perform(_ action: String) {
         _ = surfaceView.surfaceModel?.perform(action: action)
+    }
+}
+
+private struct DisconnectedBadge: View {
+    let reconnect: () -> Void
+
+    var body: some View {
+        Button(action: reconnect) {
+            Text("disconnected · reconnect")
+                .font(.system(size: 11))
+                .foregroundStyle(CardTheme.warning.opacity(0.85))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("The connection dropped; the session is still alive on the host")
+    }
+}
+
+/// "Move to Tab ▸ <tabs of the same host> / New Tab" for drako panes.
+private struct MoveToTabMenu: View {
+    let surfaceView: Ghostty.SurfaceView
+
+    var body: some View {
+        if let source = surfaceView.window?.windowController as? TerminalController,
+           let host = DrakoStore.shared.host(of: surfaceView) {
+            Menu("Move to Tab") {
+                ForEach(Array(DrakoStore.shared.tabs(on: host, excluding: source).enumerated()), id: \.offset) { index, target in
+                    Button(title(of: target, index: index)) {
+                        DrakoStore.shared.move(surfaceView, from: source, to: target)
+                    }
+                }
+
+                Divider()
+
+                Button("New Tab") {
+                    DrakoStore.shared.move(surfaceView, from: source, to: nil)
+                }
+            }
+        }
+    }
+
+    private func title(of controller: TerminalController, index: Int) -> String {
+        let label = controller.focusedSurface.map { PaneInfo.make($0).shortLabel } ?? "Terminal"
+
+        return "\(index + 1). \(label)"
     }
 }
 
@@ -142,12 +197,12 @@ private struct PaneButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(hovering ? CardTheme.primaryText : CardTheme.secondaryText)
-                .frame(width: 22, height: 20)
+                .font(.system(size: 10, weight: .regular))
+                .foregroundStyle(hovering ? CardTheme.primaryText : CardTheme.tertiaryText)
+                .frame(width: 22, height: 18)
                 .background(
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(hovering ? Color.white.opacity(0.09) : .clear)
+                        .fill(hovering ? CardTheme.hoverPill : .clear)
                 )
                 .contentShape(Rectangle())
         }

@@ -1,41 +1,31 @@
 import SwiftUI
 
-/// Sidebar listing the window's tabs and, nested, their panes. Clicking a row
-/// focuses that tab / pane.
+/// Sidebar listing hosts (with reachability), their tabs and, nested, the
+/// tabs' panes. Clicking a row focuses that tab / pane.
 struct CardSidebarView: View {
     @ObservedObject var chrome: CardChromeModel
 
+    @ObservedObject private var drako = DrakoStore.shared
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("TABS")
-                    .font(.system(size: 10, weight: .semibold))
-                    .tracking(0.8)
-                    .foregroundStyle(CardTheme.tertiaryText)
-                Spacer()
-                Text("\(chrome.tabs.count)")
-                    .font(.system(size: 10, weight: .medium).monospacedDigit())
-                    .foregroundStyle(CardTheme.tertiaryText)
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 12)
-            .padding(.bottom, 6)
-
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(chrome.tabs.enumerated()), id: \.element.id) { index, tab in
-                        SidebarTab(index: index, tab: tab, chrome: chrome)
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(drako.hosts) { host in
+                        SidebarHost(
+                            host: host,
+                            isReachable: drako.reachable.contains(host),
+                            tabs: tabs(on: host),
+                            chrome: chrome)
                     }
                 }
                 .padding(.horizontal, 6)
-                .padding(.bottom, 8)
+                .padding(.vertical, 8)
             }
 
             Spacer(minLength: 0)
 
-            Button {
-                chrome.newTab()
-            } label: {
+            NewTabMenu(chrome: chrome) {
                 HStack(spacing: 6) {
                     Image(systemName: "plus")
                         .font(.system(size: 11, weight: .semibold))
@@ -48,10 +38,9 @@ struct CardSidebarView: View {
                 }
                 .foregroundStyle(CardTheme.secondaryText)
                 .padding(.horizontal, 12)
-                .frame(height: 34)
+                .frame(width: CardTheme.sidebarWidth, height: 34)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
         }
         .frame(width: CardTheme.sidebarWidth)
         .frame(maxHeight: .infinity)
@@ -61,8 +50,58 @@ struct CardSidebarView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: CardTheme.cardRadius, style: .continuous)
-                .strokeBorder(CardTheme.cardBorder, lineWidth: 1)
+                .strokeBorder(CardTheme.cardBorder, lineWidth: 0.5)
         )
+    }
+
+    /// Tabs without a drako host (plain Ghostty) are listed under this Mac.
+    private func tabs(on host: DrakoHost) -> [(index: Int, tab: CardTabInfo)] {
+        chrome.tabs.enumerated()
+            .filter { ($0.element.host ?? .local) == host }
+            .map { (index: $0.offset, tab: $0.element) }
+    }
+}
+
+private struct SidebarHost: View {
+    let host: DrakoHost
+    let isReachable: Bool
+    let tabs: [(index: Int, tab: CardTabInfo)]
+    @ObservedObject var chrome: CardChromeModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(isReachable ? CardTheme.mint.opacity(0.8) : CardTheme.idle)
+                    .frame(width: 5, height: 5)
+                    .help(isReachable ? "Reachable" : "Unreachable")
+
+                Text(host.name.uppercased())
+                    .font(.system(size: 10, weight: .semibold))
+                    .tracking(0.8)
+                    .foregroundStyle(CardTheme.tertiaryText)
+                    .lineLimit(1)
+
+                Spacer()
+
+                Button {
+                    chrome.newTab(on: host)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(CardTheme.tertiaryText)
+                        .frame(width: 16, height: 16)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("New Tab on \(host.name)")
+            }
+            .padding(.horizontal, 6)
+
+            ForEach(tabs, id: \.tab.id) { entry in
+                SidebarTab(index: entry.index, tab: entry.tab, chrome: chrome)
+            }
+        }
     }
 }
 
@@ -117,16 +156,11 @@ private struct SidebarPane: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 7) {
-            Circle()
-                .fill(pane.hasExited ? CardTheme.exited : (pane.isRunning ? CardTheme.running : CardTheme.idle))
-                .frame(width: 6, height: 6)
-                .help(pane.hasExited ? "Exited" : (pane.isRunning ? "Running" : "Idle"))
-
             ProgramIcon(kind: pane.kind, size: 10)
 
             VStack(alignment: .leading, spacing: 0) {
                 Text(pane.program)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 11))
                     .foregroundStyle(isFocused ? CardTheme.primaryText : CardTheme.secondaryText)
                 if let cwd = pane.cwd {
                     Text(cwd)
@@ -144,7 +178,7 @@ private struct SidebarPane: View {
         .padding(.vertical, 3)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(isFocused ? Color.white.opacity(0.06) : (hovering ? CardTheme.hoverPill : .clear))
+                .fill(isFocused ? CardTheme.hoverPill : (hovering ? CardTheme.hoverPill : .clear))
         )
         .contentShape(Rectangle())
         .onHover { hovering = $0 }

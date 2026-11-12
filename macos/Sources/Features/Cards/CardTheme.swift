@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Visual constants for the newterm "card" window style. Everything that
+/// Visual constants for the Drako "card" window style. Everything that
 /// controls the look lives here so it's easy to iterate on.
 enum CardTheme {
     // MARK: Metrics
@@ -10,18 +10,18 @@ enum CardTheme {
     static let titlebarHeight: CGFloat = 46
 
     /// Gap between cards and between cards and the window edges.
-    static let gap: CGFloat = 8
+    static let gap: CGFloat = 10
 
     /// Corner radius of each pane card.
-    static let cardRadius: CGFloat = 11
+    static let cardRadius: CGFloat = 12
 
     /// Height of the header row on top of every pane card.
-    static let paneHeaderHeight: CGFloat = 30
+    static let paneHeaderHeight: CGFloat = 24
 
     /// Inset of the terminal surface inside the card. Must be at least
     /// ~0.3 * cardRadius so the (unclipped) Metal surface stays inside the
     /// rounded corners.
-    static let cardInset: CGFloat = 5
+    static let cardInset: CGFloat = 6
 
     /// Width of the sidebar.
     static let sidebarWidth: CGFloat = 236
@@ -31,27 +31,37 @@ enum CardTheme {
 
     // MARK: Colors
 
+    /// Pastels only mark status and program icons; the chrome stays neutral.
+    static let mint = Color(red: 0.655, green: 0.953, blue: 0.816) // #a7f3d0
+    static let lavender = Color(red: 0.769, green: 0.710, blue: 0.992) // #c4b5fd
+    static let peach = Color(red: 0.992, green: 0.729, blue: 0.455) // #fdba74
+    static let sky = Color(red: 0.576, green: 0.773, blue: 0.992) // #93c5fd
+
     /// Tint drawn over the (blurred, translucent) window background, visible in
-    /// the gaps between cards. Warm charcoal.
-    static let backdrop = Color(red: 0.075, green: 0.060, blue: 0.052).opacity(0.86)
+    /// the gaps between cards. Close to the terminal background (#171719) so
+    /// the panes blend in.
+    static let backdrop = Color(red: 0.075, green: 0.075, blue: 0.082).opacity(0.97)
 
     /// Background of the tab track and sidebar.
-    static let track = Color.black.opacity(0.32)
+    static let track = Color.white.opacity(0.025)
 
     /// Fill of the active tab pill.
-    static let activePill = Color.white.opacity(0.11)
+    static let activePill = Color.white.opacity(0.06)
 
     /// Fill of a hovered (inactive) tab pill.
-    static let hoverPill = Color.white.opacity(0.05)
+    static let hoverPill = Color.white.opacity(0.035)
 
-    static let primaryText = Color(red: 0.93, green: 0.90, blue: 0.86)
-    static let secondaryText = Color(red: 0.93, green: 0.90, blue: 0.86).opacity(0.55)
-    static let tertiaryText = Color(red: 0.93, green: 0.90, blue: 0.86).opacity(0.35)
+    static let primaryText = Color(white: 0.88)
+    static let secondaryText = primaryText.opacity(0.52)
+    static let tertiaryText = primaryText.opacity(0.3)
 
-    static let cardBorder = Color.white.opacity(0.07)
-    static let cardBorderFocused = Color(red: 1.0, green: 0.82, blue: 0.66).opacity(0.55)
+    /// Neutral outlines, with stronger contrast on the focused pane.
+    static let cardBorder = Color.white.opacity(0.16)
+    static let cardBorderFocused = Color.white.opacity(0.36)
 
-    static let running = Color(red: 0.45, green: 0.85, blue: 0.50)
-    static let idle = Color.white.opacity(0.25)
-    static let exited = Color(red: 0.95, green: 0.45, blue: 0.40)
+    /// Remote host names and icons.
+    static let accent = sky
+
+    static let idle = Color.white.opacity(0.18)
+    static let warning = peach
 }

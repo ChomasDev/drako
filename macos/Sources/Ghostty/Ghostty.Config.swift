@@ -68,11 +68,16 @@ extension Ghostty {
             if let path {
                 ghostty_config_load_file(cfg, path)
             } else {
-                // newterm: bundled defaults first, so user config files override them.
-                if let defaults = Bundle.main.path(forResource: "newterm-defaults", ofType: "conf") {
+                // Drako: bundled defaults first, so user config files override them...
+                if let defaults = Bundle.main.path(forResource: "drako-defaults", ofType: "conf") {
                     ghostty_config_load_file(cfg, defaults)
                 }
                 ghostty_config_load_default_files(cfg)
+
+                // ...except a Ghostty `theme`, which would hide the Drako look.
+                if let overrides = Bundle.main.path(forResource: "drako-overrides", ofType: "conf") {
+                    ghostty_config_load_file(cfg, overrides)
+                }
             }
 
             // We only load CLI args when not running in Xcode because in Xcode we

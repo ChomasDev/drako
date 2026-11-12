@@ -32,15 +32,13 @@ enum ProgramKind: Equatable {
 
     var tint: Color {
         switch self {
-        case .shell: Color(red: 0.80, green: 0.76, blue: 0.70)
-        case .node: Color(red: 0.49, green: 0.80, blue: 0.42)
-        case .git: Color(red: 0.96, green: 0.55, blue: 0.33)
-        case .agent: Color(red: 0.92, green: 0.56, blue: 0.42)
-        case .editor: Color(red: 0.48, green: 0.68, blue: 0.95)
-        case .python: Color(red: 0.98, green: 0.83, blue: 0.36)
-        case .remote: Color(red: 0.55, green: 0.80, blue: 0.85)
-        case .monitor: Color(red: 0.78, green: 0.62, blue: 0.95)
-        case .other: Color(red: 0.80, green: 0.76, blue: 0.70)
+        case .shell, .other: CardTheme.secondaryText
+        case .node: CardTheme.mint
+        case .git: CardTheme.peach
+        case .agent: CardTheme.lavender
+        case .editor, .remote: CardTheme.sky
+        case .python: Color(red: 0.97, green: 0.85, blue: 0.58)
+        case .monitor: CardTheme.lavender
         }
     }
 
@@ -82,8 +80,10 @@ struct PaneInfo: Equatable, Identifiable {
     let program: String
     let cwd: String?
     let title: String
-    let isRunning: Bool
     let hasExited: Bool
+
+    /// A remote drako pane whose ssh client is gone (it waits for Enter to reconnect).
+    var isDisconnected: Bool = false
 
     /// "Node ~/Sites/project"
     var label: String {
@@ -99,6 +99,10 @@ struct PaneInfo: Equatable, Identifiable {
 
     @MainActor
     static func make(_ view: Ghostty.SurfaceView) -> PaneInfo {
+        if let host = DrakoStore.shared.host(of: view) {
+            return makeDrako(view, host: host)
+        }
+
         let process = foregroundProcess(view)
         let kind = ProgramKind.classify(name: process.name, path: process.path, title: view.title)
         return PaneInfo(
@@ -107,8 +111,57 @@ struct PaneInfo: Equatable, Identifiable {
             program: displayName(process.name, kind: kind, title: view.title),
             cwd: view.pwd.map(abbreviate),
             title: view.title,
-            isRunning: !view.processExited && view.needsConfirmQuit,
             hasExited: view.processExited)
+    }
+
+    /// A drako pane's own process is just the attach client, so the program
+    /// comes from the title the inner shell sets and the folder from `drako ls`.
+    @MainActor
+    private static func makeDrako(_ view: Ghostty.SurfaceView, host: DrakoHost) -> PaneInfo {
+        let title = view.title == defaultTitle ? "" : view.title
+        let name = title.split(separator: " ").first.map(String.init) ?? "shell"
+        let kind = title.isEmpty ? .shell : ProgramKind.classify(name: name, path: nil, title: title)
+        let cwd = DrakoStore.shared.directory(of: view).map { host.isLocal ? abbreviate($0) : $0 }
+
+        var info = PaneInfo(
+            id: view.id,
+            kind: kind,
+            program: displayName(name, kind: kind, title: title),
+            cwd: cwd,
+            title: title,
+            hasExited: view.processExited)
+
+        if !host.isLocal, !view.processExited, let pid = view.surfaceModel?.foregroundPID, pid > 0 {
+            info.isDisconnected = !hasDescendant(named: "ssh", of: pid_t(pid))
+        }
+
+        return info
+    }
+
+    /// Ghostty's title before the program sets one.
+    private static let defaultTitle = "👻"
+
+    private static let maxProcessDepth = 4
+
+    private static func hasDescendant(named name: String, of pid: pid_t, depth: Int = 0) -> Bool {
+        guard depth < maxProcessDepth else { return false }
+
+        var children = [pid_t](repeating: 0, count: 64)
+        // Returns a count of pids, not of bytes.
+        let count = proc_listchildpids(pid, &children, Int32(children.count * MemoryLayout<pid_t>.size))
+
+        guard count > 0 else { return false }
+
+        for child in children.prefix(Int(count)) where child > 0 {
+            var nameBuf = [CChar](repeating: 0, count: 256)
+            proc_name(child, &nameBuf, UInt32(nameBuf.count))
+
+            if String(cString: nameBuf) == name { return true }
+
+            if hasDescendant(named: name, of: child, depth: depth + 1) { return true }
+        }
+
+        return false
     }
 
     // MARK: Helpers

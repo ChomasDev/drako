@@ -6,11 +6,10 @@ import SwiftUI
 /// tab strip and the sidebar.
 struct CardTabInfo: Equatable, Identifiable {
     let id: ObjectIdentifier
+    let host: DrakoHost?
     let isSelected: Bool
     let focusedPane: PaneInfo?
     let panes: [PaneInfo]
-
-    var isRunning: Bool { panes.contains(where: { $0.isRunning }) }
 }
 
 /// Per-window model that drives the card chrome (titlebar tabs + sidebar).
@@ -77,6 +76,7 @@ final class CardChromeModel: ObservableObject {
             let focused = tabController.focusedSurface.map { PaneInfo.make($0) } ?? panes.first
             return CardTabInfo(
                 id: ObjectIdentifier(tabWindow),
+                host: DrakoStore.shared.host(of: tabController),
                 isSelected: tabWindow === selected,
                 focusedPane: focused,
                 panes: panes)
@@ -112,8 +112,12 @@ final class CardChromeModel: ObservableObject {
         tabController.focusSurface(view)
     }
 
-    func newTab() {
-        controller?.newTab(nil)
+    var selectedHost: DrakoHost? {
+        tabs.first { $0.isSelected }?.host
+    }
+
+    func newTab(on host: DrakoHost) {
+        DrakoStore.shared.openTab(on: host, from: controller?.window)
     }
 
     static func toggleSidebar() {
