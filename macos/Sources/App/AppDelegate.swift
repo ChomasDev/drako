@@ -246,6 +246,9 @@ class AppDelegate: NSObject,
         // Initial config loading
         ghosttyConfigDidChange(config: ghostty.config)
 
+        // newterm: card style menu items
+        installCardMenuItems()
+
         // Start our update checker.
         updateController.startUpdater()
 

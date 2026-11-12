@@ -46,6 +46,7 @@ struct TerminalSplitTreeView: View {
 
 private struct TerminalSplitSubtreeView: View {
     @EnvironmentObject var ghostty: Ghostty.App
+    @Environment(\.cardStyle) private var cardStyle
 
     let node: SplitTree<Ghostty.SurfaceView>.Node
     var isRoot: Bool = false
@@ -69,7 +70,8 @@ private struct TerminalSplitSubtreeView: View {
                 }, set: {
                     action(.resize(.init(node: node, ratio: $0)))
                 }),
-                dividerColor: ghostty.config.splitDividerColor,
+                dividerColor: cardStyle ? .clear : ghostty.config.splitDividerColor,
+                dividerSize: cardStyle ? CardTheme.gap : 1,
                 resizeIncrements: .init(width: 1, height: 1),
                 left: {
                     TerminalSplitSubtreeView(node: split.left, action: action)
@@ -93,8 +95,17 @@ private struct TerminalSplitLeaf: View {
 
     @State private var dropState: DropState = .idle
     @State private var isSelfDragging: Bool = false
+    @Environment(\.cardStyle) private var cardStyle
 
     var body: some View {
+        if cardStyle {
+            CardPaneView(surfaceView: surfaceView) { leaf }
+        } else {
+            leaf
+        }
+    }
+
+    private var leaf: some View {
         GeometryReader { geometry in
             Ghostty.InspectableSurface(
                 surfaceView: surfaceView,

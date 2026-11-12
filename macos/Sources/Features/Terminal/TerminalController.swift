@@ -21,17 +21,8 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         let nib = switch config.macosTitlebarStyle {
         case .native: "Terminal"
         case .hidden: "TerminalHiddenTitlebar"
-        case .transparent: "TerminalTransparentTitlebar"
-        case .tabs:
-#if compiler(>=6.2)
-            if #available(macOS 26.0, *) {
-                "TerminalTabsTitlebarTahoe"
-            } else {
-                "TerminalTabsTitlebarVentura"
-            }
-#else
-            "TerminalTabsTitlebarVentura"
-#endif
+        // newterm: the default ("transparent") and "tabs" styles use the card window.
+        case .transparent, .tabs: "TerminalCards"
         }
 
         return nib
@@ -1113,8 +1104,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         }
 
         // Initialize our content view to the SwiftUI root
+        let cardChrome = window is CardTerminalWindow ? CardChromeModel(controller: self) : nil
         let container = TerminalViewContainer {
-            TerminalView(ghostty: ghostty, viewModel: self, delegate: self)
+            TerminalView(ghostty: ghostty, viewModel: self, delegate: self, cardChrome: cardChrome)
         }
 
         // Set the initial content size on the container so that
