@@ -13,7 +13,7 @@ enum CardTheme {
     static let gap: CGFloat = 10
 
     /// Corner radius of each pane card.
-    static let cardRadius: CGFloat = 12
+    static let cardRadius: CGFloat = 14
 
     /// Height of the header row on top of every pane card.
     static let paneHeaderHeight: CGFloat = 24
@@ -55,13 +55,62 @@ enum CardTheme {
     static let secondaryText = primaryText.opacity(0.52)
     static let tertiaryText = primaryText.opacity(0.3)
 
-    /// Neutral outlines, with stronger contrast on the focused pane.
-    static let cardBorder = Color.white.opacity(0.16)
-    static let cardBorderFocused = Color.white.opacity(0.36)
+    /// Glass cards: a whisper of white over the blur, a touch more when focused.
+    static let glassTint = Color.white.opacity(0.015)
+    static let glassTintFocused = Color.white.opacity(0.04)
+
+    /// Charcoal tint of the glass itself, so a card is only slightly lighter
+    /// than the window and close to the terminal background it frames.
+    static let glassBase = Color(red: 0.09, green: 0.09, blue: 0.1).opacity(0.62)
+
+    /// The card outline is lit from the top and fades towards the bottom.
+    static let glassStroke = LinearGradient(
+        colors: [.white.opacity(0.17), .white.opacity(0.05)],
+        startPoint: .top,
+        endPoint: .bottom)
+
+    static let glassStrokeFocused = LinearGradient(
+        colors: [.white.opacity(0.32), .white.opacity(0.11)],
+        startPoint: .top,
+        endPoint: .bottom)
+
+    static let cardShadow = Color.black.opacity(0.28)
+
+    /// The sidebar row of the focused pane.
+    static let selectedRow = Color.white.opacity(0.075)
 
     /// Remote host names and icons.
     static let accent = sky
 
     static let idle = Color.white.opacity(0.18)
     static let warning = peach
+}
+
+/// The Liquid Glass panel behind pane cards and the sidebar: translucent, a
+/// little lighter than the window, with a top-lit 1px outline and a soft shadow.
+struct CardGlassBackground: View {
+    var isFocused = false
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: CardTheme.cardRadius, style: .continuous)
+
+        glass(shape)
+            .overlay {
+                shape.fill(isFocused ? CardTheme.glassTintFocused : CardTheme.glassTint)
+            }
+            .overlay {
+                shape.strokeBorder(isFocused ? CardTheme.glassStrokeFocused : CardTheme.glassStroke, lineWidth: 1)
+            }
+            .shadow(color: CardTheme.cardShadow, radius: 10, y: 3)
+            .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private func glass(_ shape: RoundedRectangle) -> some View {
+        if #available(macOS 26, *) {
+            Color.clear.glassEffect(.regular.tint(CardTheme.glassBase), in: shape)
+        } else {
+            shape.fill(.ultraThinMaterial)
+        }
+    }
 }

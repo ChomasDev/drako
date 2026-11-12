@@ -82,8 +82,16 @@ struct PaneInfo: Equatable, Identifiable {
     let title: String
     let hasExited: Bool
 
+    /// The machine a drako pane runs on; nil for a plain Ghostty pane.
+    var host: DrakoHost?
+
     /// A remote drako pane whose ssh client is gone (it waits for Enter to reconnect).
     var isDisconnected: Bool = false
+
+    /// The program is alive and, for a remote pane, connected.
+    var isRunning: Bool {
+        !hasExited && !isDisconnected
+    }
 
     /// "Node ~/Sites/project"
     var label: String {
@@ -119,23 +127,40 @@ struct PaneInfo: Equatable, Identifiable {
     @MainActor
     private static func makeDrako(_ view: Ghostty.SurfaceView, host: DrakoHost) -> PaneInfo {
         let title = view.title == defaultTitle ? "" : view.title
-        let name = title.split(separator: " ").first.map(String.init) ?? "shell"
-        let kind = title.isEmpty ? .shell : ProgramKind.classify(name: name, path: nil, title: title)
-        let cwd = DrakoStore.shared.directory(of: view).map { host.isLocal ? abbreviate($0) : $0 }
+        let prompt = shellPrompt(in: title)
+        let name = prompt == nil ? title.split(separator: " ").first.map(String.init) ?? "shell" : "shell"
+        let kind = prompt != nil || title.isEmpty ? .shell : ProgramKind.classify(name: name, path: nil, title: title)
+        let cwd = prompt?.cwd ?? DrakoStore.shared.directory(of: view)
 
         var info = PaneInfo(
             id: view.id,
             kind: kind,
             program: displayName(name, kind: kind, title: title),
-            cwd: cwd,
+            cwd: cwd.map { host.isLocal ? abbreviate($0) : $0 },
             title: title,
-            hasExited: view.processExited)
+            hasExited: view.processExited,
+            host: host)
 
         if !host.isLocal, !view.processExited, let pid = view.surfaceModel?.foregroundPID, pid > 0 {
             info.isDisconnected = !hasDescendant(named: "ssh", of: pid_t(pid))
         }
 
         return info
+    }
+
+    /// A shell's default title is its prompt, "user@host:~/dir": an idle shell
+    /// in that folder, not a program called "user@host:~/dir".
+    static func shellPrompt(in title: String) -> (user: String, cwd: String)? {
+        guard !title.contains(" "),
+              let at = title.firstIndex(of: "@"),
+              let colon = title[at...].firstIndex(of: ":")
+        else { return nil }
+
+        let cwd = String(title[title.index(after: colon)...])
+
+        guard !cwd.isEmpty else { return nil }
+
+        return (user: String(title[..<at]), cwd: cwd)
     }
 
     /// Ghostty's title before the program sets one.

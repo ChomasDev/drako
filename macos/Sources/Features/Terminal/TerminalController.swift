@@ -1114,7 +1114,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
         // Initialize our content view to the SwiftUI root
         let cardChrome = window is CardTerminalWindow ? CardChromeModel(controller: self) : nil
-        let container = TerminalViewContainer {
+        let container = TerminalViewContainer(ignoresSafeArea: cardChrome != nil) {
             TerminalView(ghostty: ghostty, viewModel: self, delegate: self, cardChrome: cardChrome)
         }
 

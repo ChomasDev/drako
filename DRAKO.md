@@ -59,21 +59,34 @@ Drako shares one ssh connection per host (`ControlPath=~/.ssh/drako-%C`,
 
 ## How tabs map to sessions
 
-- Every tab belongs to one host and has a stable drako tab key (8 hex chars);
-  the UI shows the pane's program and folder instead.
-- **New tab** (`+`, ⌘T): pick the host from a menu (the last used one is
-  checked). It runs `drako new --tab <key>` and opens a pane running
-  `drako attach <id>`, or `ssh -t <host> /usr/local/bin/drako attach <id>`.
-- **Split**: a new session in the same drako tab.
+- A pane is a drako terminal on one host: `(host, id)`. Tabs belong to the
+  client, so one tab can mix machines (a local pane next to a remote one).
+- The workspace (tabs, order, titles, the panes of each tab and their split
+  layout) is saved on this Mac in
+  `~/Library/Application Support/Drako/workspace.json`. On launch Drako
+  rebuilds it, dropping the panes whose terminal is gone; panes of a host that
+  can't be reached are kept and reconnect on Enter. The very first launch
+  groups the live terminals by their drako tab key instead.
+- `drako ls --json` on each host only checks which terminals are alive and
+  finds **detached** ones (live, but in no tab). `--tab <key>` is still passed
+  to `drako new` and `drako move` as a hint, but never used to group panes.
+- **New tab** (`+`, ⌘T): on the last used host. Hold the `+` for the host menu.
+- **Split**: on the focused pane's host. ⌥-click a split button, or use the
+  small chevron next to them, to pick another machine.
+- **Machines** (the host name in the titlebar, showing the focused pane's
+  host): every machine with status, live terminals and latency, "New terminal
+  here" (a pane on that host in the current tab) and "Edit hosts…".
 - **Close** a pane (card ×, ⌘W) or a tab: `drako kill`. A pane whose program
   already ended (shell `exit`, ctrl+\ detach) is left alone.
-- **Quit** Drako: nothing is killed. On launch, `drako ls --json` on every host
-  rebuilds the tabs (panes side by side: layouts aren't stored).
-- **Move**: right-click a card header → Move to Tab ▸ (tabs of the same host,
-  or New Tab). Runs `drako move <id> <key>` and re-attaches the pane there.
-- **Disconnected**: when ssh drops, the card says "Disconnected · Reconnect";
+- **Quit** Drako: nothing is killed.
+- **Move** a pane to another tab: drag it in the sidebar, or right-click a card
+  header → Move to Tab ▸. The pane moves as is (no re-attach).
+- **Disconnected**: when ssh drops, the card says "disconnected · reconnect";
   click it or press Enter in the pane to re-attach.
-- **Sidebar** (⌘⇧S): hosts with reachability (green / grey), their tabs, panes.
+- **Sidebar** (⌘⇧S): Machines, Tabs (with their panes, collapsible) and
+  Detached. Drag tabs to reorder them, a pane onto a tab to move it or onto a
+  pane of the same tab to swap them, a detached terminal onto a tab to attach
+  it (or click it to attach it to the current tab).
 
 ## Config
 
@@ -87,14 +100,15 @@ files around it:
 
 ## Code
 
-- `macos/Sources/Features/Drako/`: hosts, the `drako` CLI runner and the store
-  tying tabs/panes to sessions
+- `macos/Sources/Features/Drako/`: hosts, the `drako` CLI runner, the saved
+  workspace and the store tying tabs/panes to sessions
 - `macos/Sources/Features/Cards/`: the card UI
   - `CardTheme.swift`: colors and metrics (edit this to restyle)
   - `CardTitlebarView.swift`: traffic lights, host label, tab pills, "+" menu
-  - `CardSidebarView.swift`: hosts → tabs → panes sidebar (⌘⇧S)
+  - `CardSidebarView.swift`: machines / tabs → panes / detached sidebar (⌘⇧S)
   - `CardPaneView.swift`: pane cards (header buttons, move menu, disconnected badge)
-  - `CardChromeModel.swift`: per-window model reading the native tab group
+  - `CardChromeModel.swift`: `CardWorkspace`, the one model of tabs, panes and
+    detached terminals behind the titlebar and sidebar, and the per-window handle
   - `PaneInfo.swift`: foreground program detection (icons) and host info
 - `macos/Sources/Features/Terminal/Window Styles/CardTerminalWindow.swift`:
   the window style. It hides the native titlebar and tab bar.

@@ -42,7 +42,10 @@ class BaseTerminalController: NSWindowController,
 
     /// The currently focused surface.
     var focusedSurface: Ghostty.SurfaceView? {
-        didSet { syncFocusToSurfaceTree() }
+        didSet {
+            syncFocusToSurfaceTree()
+            CardWorkspace.shared.setNeedsRefresh()
+        }
     }
 
     /// The tree of splits within this terminal window.
@@ -337,6 +340,9 @@ class BaseTerminalController: NSWindowController,
         for surfaceView in from where !to.contains(surfaceView) {
             cancelPendingClipboardConfirmation(for: surfaceView)
         }
+
+        // Drako: the sidebar, tab strip and saved workspace follow the splits.
+        CardWorkspace.shared.setNeedsRefresh()
 
         // If our surface tree becomes empty then we have no focused surface.
         if to.isEmpty {
@@ -687,7 +693,7 @@ class BaseTerminalController: NSWindowController,
         default: return
         }
 
-        if let controller = self as? TerminalController, DrakoStore.shared.host(of: controller) != nil {
+        if let controller = self as? TerminalController, DrakoStore.shared.isDrakoTab(controller) {
             DrakoStore.shared.openSplit(in: controller, at: oldView, direction: splitDirection)
             return
         }

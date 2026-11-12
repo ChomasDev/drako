@@ -9,10 +9,13 @@ enum DrakoCLI {
         var errorDescription: String? { message }
     }
 
-    struct ListedTerminal: Decodable {
+    struct ListedTerminal: Decodable, Equatable {
         let id: String
         let tab: String
         let cwd: String
+
+        /// A client (this or another app) is attached right now.
+        let attached: Bool
     }
 
     static let remoteBinary = "/usr/local/bin/drako"
@@ -104,7 +107,11 @@ enum DrakoCLI {
         }
 
         let remote = [remoteBinary] + arguments.map(shellQuote)
-        let options = sshSharing + ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
+
+        // Reuse a pane's shared connection but never become the master: a
+        // persisting master keeps our stderr pipe open and the read never ends.
+        // ssh keeps the first value of an option, so this one comes first.
+        let options = ["-o", "ControlMaster=no", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3"] + sshSharing
 
         return try await execute(ssh, options + [target] + remote, timeout: commandTimeout)
     }

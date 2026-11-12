@@ -14,7 +14,6 @@ struct CardPaneView<Content: View>: View {
     @ObservedObject var surfaceView: Ghostty.SurfaceView
     let content: Content
 
-    @EnvironmentObject private var ghostty: Ghostty.App
     @Environment(\.ghosttyLastFocusedSurface) private var lastFocusedSurface
 
     init(surfaceView: Ghostty.SurfaceView, @ViewBuilder content: () -> Content) {
@@ -26,13 +25,7 @@ struct CardPaneView<Content: View>: View {
         lastFocusedSurface?.value === surfaceView
     }
 
-    private var cardFill: Color {
-        let bg = surfaceView.backgroundColor ?? ghostty.config.backgroundColor
-        return bg.opacity(ghostty.config.backgroundOpacity)
-    }
-
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: CardTheme.cardRadius, style: .continuous)
         let inset = CardTheme.cardInset
 
         VStack(spacing: 0) {
@@ -44,29 +37,7 @@ struct CardPaneView<Content: View>: View {
                 .padding(.bottom, inset)
         }
         .background {
-            // Fill the card everywhere except where the surface draws its own background.
-            shape
-                .fill(cardFill)
-                .mask {
-                    ZStack {
-                        Rectangle()
-                        Rectangle()
-                            .padding(EdgeInsets(
-                                top: CardTheme.paneHeaderHeight,
-                                leading: inset,
-                                bottom: inset,
-                                trailing: inset))
-                            .blendMode(.destinationOut)
-                    }
-                    .compositingGroup()
-                }
-        }
-        .overlay {
-            shape
-                .strokeBorder(
-                    isFocused ? CardTheme.cardBorderFocused : CardTheme.cardBorder,
-                    lineWidth: 1)
-                .allowsHitTesting(false)
+            CardGlassBackground(isFocused: isFocused)
         }
         .animation(.easeOut(duration: 0.12), value: isFocused)
     }
@@ -78,12 +49,20 @@ private struct CardPaneHeader: View {
 
     @State private var hovering = false
 
+    private var controller: TerminalController? {
+        surfaceView.window?.windowController as? TerminalController
+    }
+
     var body: some View {
         // Foreground process changes aren't observable, so re-sample periodically.
         TimelineView(.periodic(from: .now, by: 1)) { _ in
             let info = PaneInfo.make(surfaceView)
 
             HStack(spacing: 6) {
+                if let host = info.host, !host.isLocal {
+                    HostBadge(host: host)
+                }
+
                 Text(info.program)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(isFocused ? CardTheme.primaryText.opacity(0.8) : CardTheme.tertiaryText)
@@ -105,12 +84,17 @@ private struct CardPaneHeader: View {
 
                 // Only on hover: the header stays a quiet label otherwise.
                 HStack(spacing: 0) {
-                    PaneButton(symbol: "rectangle.split.2x1", help: "Split Right") {
-                        perform("new_split:right")
+                    PaneButton(symbol: "rectangle.split.2x1", help: "Split Right (⌥-click: on another machine)") {
+                        split(.right, action: "new_split:right")
                     }
-                    PaneButton(symbol: "rectangle.split.1x2", help: "Split Down") {
-                        perform("new_split:down")
+                    PaneButton(symbol: "rectangle.split.1x2", help: "Split Down (⌥-click: on another machine)") {
+                        split(.down, action: "new_split:down")
                     }
+
+                    if info.host != nil {
+                        SplitHostMenu(surfaceView: surfaceView)
+                    }
+
                     PaneButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Zoom Pane") {
                         perform("toggle_split_zoom")
                     }
@@ -137,8 +121,103 @@ private struct CardPaneHeader: View {
         }
     }
 
+    /// A split on this pane's machine, or ⌥-click to pick another one.
+    private func split(_ direction: SplitTree<Ghostty.SurfaceView>.NewDirection, action: String) {
+        guard NSEvent.modifierFlags.contains(.option),
+              let controller,
+              DrakoStore.shared.isDrakoTab(controller)
+        else {
+            perform(action)
+            return
+        }
+
+        HostPicker.popUp(title: "Split On") { host in
+            DrakoStore.shared.openSplit(in: controller, at: surfaceView, direction: direction, on: host)
+        }
+    }
+
     private func perform(_ action: String) {
         _ = surfaceView.surfaceModel?.perform(action: action)
+    }
+}
+
+/// The small "split on another machine" menu next to the split buttons.
+private struct SplitHostMenu: View {
+    let surfaceView: Ghostty.SurfaceView
+
+    @ObservedObject private var drako = DrakoStore.shared
+
+    var body: some View {
+        Menu {
+            ForEach(drako.hosts) { host in
+                Section(host.name) {
+                    Button("Split Right") { split(.right, on: host) }
+                    Button("Split Down") { split(.down, on: host) }
+                }
+            }
+        } label: {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(CardTheme.tertiaryText)
+                .frame(width: 14, height: 18)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        // Menu labels ignore foregroundStyle: dim it like the other header buttons.
+        .opacity(0.45)
+        .help("Split on another machine")
+    }
+
+    private func split(_ direction: SplitTree<Ghostty.SurfaceView>.NewDirection, on host: DrakoHost) {
+        guard let controller = surfaceView.window?.windowController as? TerminalController else { return }
+
+        DrakoStore.shared.openSplit(in: controller, at: surfaceView, direction: direction, on: host)
+    }
+}
+
+/// A one-off menu of the machines at the mouse, for ⌥-click actions.
+@MainActor
+enum HostPicker {
+    static func popUp(title: String, pick: @escaping (DrakoHost) -> Void) {
+        let menu = NSMenu(title: title)
+        menu.addItem(withTitle: title, action: nil, keyEquivalent: "")
+
+        for host in DrakoStore.shared.hosts {
+            let item = NSMenuItem(title: host.name, action: #selector(MenuTarget.pick(_:)), keyEquivalent: "")
+            item.target = MenuTarget.shared
+            item.representedObject = { pick(host) }
+            item.isEnabled = DrakoStore.shared.state(of: host).reachability != .unreachable
+            menu.addItem(item)
+        }
+
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+    }
+
+    /// NSMenuItem needs an Objective-C target; the item carries its own closure.
+    private final class MenuTarget: NSObject {
+        static let shared = MenuTarget()
+
+        @objc func pick(_ sender: NSMenuItem) {
+            (sender.representedObject as? () -> Void)?()
+        }
+    }
+}
+
+/// The name of a remote machine, as a small pill.
+struct HostBadge: View {
+    let host: DrakoHost
+
+    var body: some View {
+        Text(host.name)
+            .font(.system(size: 9.5, weight: .semibold))
+            .foregroundStyle(CardTheme.accent.opacity(0.9))
+            .padding(.horizontal, 5)
+            .frame(height: 15)
+            .background(Capsule().fill(CardTheme.accent.opacity(0.12)))
+            .lineLimit(1)
+            .fixedSize()
     }
 }
 
@@ -157,31 +236,33 @@ private struct DisconnectedBadge: View {
     }
 }
 
-/// "Move to Tab ▸ <tabs of the same host> / New Tab" for drako panes.
+/// "Move to Tab ▸ <every other tab> / New Tab" for drako panes. The pane moves
+/// as is, whatever machine the tabs' other panes run on.
 private struct MoveToTabMenu: View {
     let surfaceView: Ghostty.SurfaceView
 
     var body: some View {
-        if let source = surfaceView.window?.windowController as? TerminalController,
-           let host = DrakoStore.shared.host(of: surfaceView) {
+        if let source = DrakoStore.controller(of: surfaceView), DrakoStore.shared.pane(of: surfaceView) != nil {
+            let targets = DrakoStore.orderedTabs.filter { $0 !== source }
+
             Menu("Move to Tab") {
-                ForEach(Array(DrakoStore.shared.tabs(on: host, excluding: source).enumerated()), id: \.offset) { index, target in
+                ForEach(Array(targets.enumerated()), id: \.offset) { index, target in
                     Button(title(of: target, index: index)) {
-                        DrakoStore.shared.move(surfaceView, from: source, to: target)
+                        DrakoStore.shared.move(surfaceView, to: target)
                     }
                 }
 
                 Divider()
 
                 Button("New Tab") {
-                    DrakoStore.shared.move(surfaceView, from: source, to: nil)
+                    DrakoStore.shared.moveToNewTab(surfaceView)
                 }
             }
         }
     }
 
     private func title(of controller: TerminalController, index: Int) -> String {
-        let label = controller.focusedSurface.map { PaneInfo.make($0).shortLabel } ?? "Terminal"
+        let label = controller.titleOverride ?? controller.focusedSurface.map { PaneInfo.make($0).shortLabel } ?? "Terminal"
 
         return "\(index + 1). \(label)"
     }

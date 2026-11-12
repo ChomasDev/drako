@@ -22,8 +22,16 @@ class TerminalViewContainer: NSView {
         return window.value(forKey: "_cornerRadius") as? CGFloat
     }
 
-    init<Root: View>(@ViewBuilder rootView: () -> Root) {
-        self.terminalView = NSHostingView(rootView: rootView())
+    /// `ignoresSafeArea`: the content draws its own titlebar (Drako cards), so
+    /// AppKit's titlebar safe area would only push scroll views up under it.
+    init<Root: View>(ignoresSafeArea: Bool = false, @ViewBuilder rootView: () -> Root) {
+        let hostingView = NSHostingView(rootView: rootView())
+
+        if ignoresSafeArea, #available(macOS 13.3, *) {
+            hostingView.safeAreaRegions = []
+        }
+
+        self.terminalView = hostingView
         super.init(frame: .zero)
         setup()
     }

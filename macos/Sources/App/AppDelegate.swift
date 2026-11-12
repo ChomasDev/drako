@@ -830,9 +830,9 @@ class AppDelegate: NSObject,
         let configAny = notification.userInfo?[Ghostty.Notification.NewSurfaceConfigKey]
         let config = configAny as? Ghostty.SurfaceConfiguration
 
-        // Drako: new tabs are drako tabs on a host the user picks.
+        // Drako: new tabs are drako tabs on the last used host.
         guard config?.command != nil else {
-            DrakoStore.shared.chooseHostAndOpenTab(from: window)
+            DrakoStore.shared.openTab(on: DrakoStore.shared.lastHost, from: window)
             return
         }
 
@@ -1075,7 +1075,7 @@ class AppDelegate: NSObject,
             return
         }
 
-        DrakoStore.shared.chooseHostAndOpenTab(from: window)
+        DrakoStore.shared.openTab(on: DrakoStore.shared.lastHost, from: window)
     }
 
     @IBAction func closeAllWindows(_ sender: Any?) {
