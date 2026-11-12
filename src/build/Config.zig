@@ -63,6 +63,7 @@ emit_exe: bool = false,
 emit_helpgen: bool = false,
 emit_lib_vt: bool = false,
 emit_macos_app: bool = false,
+metal_runtime_shaders: bool = false,
 emit_terminfo: bool = false,
 emit_termcap: bool = false,
 emit_test_exe: bool = false,
@@ -641,6 +642,14 @@ pub fn init(b: *std.Build, versions: Versions) !Config {
                 !config.emit_helpgen);
     };
 
+    config.metal_runtime_shaders = b.option(
+        bool,
+        "metal-runtime-shaders",
+        "Compile Metal shaders at runtime from source instead of " ++
+            "precompiling a metallib. Useful when the Xcode Metal " ++
+            "Toolchain component is unavailable.",
+    ) orelse false;
+
     config.emit_macos_app = b.option(
         bool,
         "emit-macos-app",
@@ -815,6 +824,7 @@ pub fn addOptions(self: *const Config, step: *std.Build.Step.Options) !void {
     step.addOption(ExeEntrypoint, "exe_entrypoint", self.exe_entrypoint);
     step.addOption(WasmTarget, "wasm_target", self.wasm_target);
     step.addOption(bool, "wasm_shared", self.wasm_shared);
+    step.addOption(bool, "metal_runtime_shaders", self.metal_runtime_shaders);
 
     // Our version. We also add the string version so we don't need
     // to do any allocations at runtime. This has to be long enough to

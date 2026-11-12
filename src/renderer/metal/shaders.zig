@@ -4,6 +4,7 @@ const macos = @import("macos");
 const objc = @import("objc");
 const math = @import("../../math.zig");
 const global = @import("../../global.zig");
+const build_config = @import("../../build_config.zig");
 
 const mtl = @import("api.zig");
 const Pipeline = @import("Pipeline.zig");
@@ -336,6 +337,10 @@ pub const BgImage = extern struct {
 fn initLibrary(device: objc.Object) !objc.Object {
     const start: std.Io.Timestamp = .now(global.io(), .awake);
 
+    if (comptime build_config.metal_runtime_shaders) {
+        return initLibraryFromSource(device, start);
+    }
+
     const data = try macos.dispatch.Data.create(
         @embedFile("ghostty_metallib"),
         macos.dispatch.queue.getMain(),
@@ -355,6 +360,33 @@ fn initLibrary(device: objc.Object) !objc.Object {
     try checkError(err);
 
     log.debug("shader library loaded time={}us", .{start.untilNow(global.io(), .awake).toMicroseconds()});
+
+    return library;
+}
+
+/// Compile the MTLLibrary at runtime from the embedded Metal source. Used
+/// when the build was configured with `-Dmetal-runtime-shaders`.
+fn initLibraryFromSource(device: objc.Object, start: std.Io.Timestamp) !objc.Object {
+    const source = try macos.foundation.String.createWithBytes(
+        @embedFile("ghostty_metallib"),
+        .utf8,
+        false,
+    );
+    defer source.release();
+
+    var err: ?*anyopaque = null;
+    const library = device.msgSend(
+        objc.Object,
+        objc.sel("newLibraryWithSource:options:error:"),
+        .{
+            source,
+            @as(?*anyopaque, null),
+            &err,
+        },
+    );
+    try checkError(err);
+
+    log.debug("shader library compiled time={}us", .{start.untilNow(global.io(), .awake).toMicroseconds()});
 
     return library;
 }
