@@ -508,16 +508,15 @@ pub fn add(
     if (step.rootModuleTarget().os.tag.isDarwin()) {
         try @import("apple_sdk").addPaths(b, step);
 
-        if (self.metallib) |metallib| {
-            metallib.output.addStepDependencies(&step.step);
-            step.root_module.addAnonymousImport("ghostty_metallib", .{
-                .root_source_file = metallib.output,
-            });
-        } else {
-            step.root_module.addAnonymousImport("ghostty_metallib", .{
-                .root_source_file = b.path("src/renderer/shaders/shaders.metal"),
-            });
-        }
+        // -Dmetal-runtime-shaders embeds the Metal source instead of a metallib.
+        const metallib: std.Build.LazyPath = if (self.metallib) |m|
+            m.output
+        else
+            b.path("src/renderer/shaders/shaders.metal");
+        metallib.addStepDependencies(&step.step);
+        step.root_module.addAnonymousImport("ghostty_metallib", .{
+            .root_source_file = metallib,
+        });
     }
 
     // Other dependencies, mostly pure Zig

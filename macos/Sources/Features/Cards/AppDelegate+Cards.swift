@@ -3,12 +3,15 @@ import AppKit
 extension AppDelegate {
     /// Adds the Drako-specific menu items (View > Toggle Sidebar, ⌘⇧S).
     @MainActor func installCardMenuItems() {
-        guard let viewMenu = NSApp.mainMenu?.items.first(where: { $0.submenu?.title == "View" })?.submenu else { return }
-        guard viewMenu.items.first(where: { $0.action == #selector(toggleCardSidebar(_:)) }) == nil else { return }
+        let toggle = #selector(toggleCardSidebar(_:))
+
+        guard let viewMenu = NSApp.mainMenu?.items.first(where: { $0.submenu?.title == "View" })?.submenu,
+              !viewMenu.items.contains(where: { $0.action == toggle })
+        else { return }
 
         let item = NSMenuItem(
             title: "Toggle Sidebar",
-            action: #selector(toggleCardSidebar(_:)),
+            action: toggle,
             keyEquivalent: "s")
         item.keyEquivalentModifierMask = [.command, .shift]
         item.target = self

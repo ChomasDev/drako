@@ -1,6 +1,5 @@
 import AppKit
 import Darwin
-import IOKit
 import SwiftUI
 
 /// The kind of program running in the foreground of a pane. Used to pick an
@@ -35,18 +34,17 @@ enum ProgramKind: Equatable {
         case .shell, .other: CardTheme.secondaryText
         case .node: CardTheme.mint
         case .git: CardTheme.peach
-        case .agent: CardTheme.lavender
+        case .agent, .monitor: CardTheme.lavender
         case .editor, .remote: CardTheme.sky
-        case .python: Color(red: 0.97, green: 0.85, blue: 0.58)
-        case .monitor: CardTheme.lavender
+        case .python: CardTheme.butter
         }
     }
 
-    private static let shellsNames: Set<String> = ["zsh", "bash", "fish", "sh", "nu", "dash", "tcsh", "ksh", "xonsh", "elvish", "pwsh", "login"]
+    private static let shellNames: Set<String> = ["zsh", "bash", "fish", "sh", "nu", "dash", "tcsh", "ksh", "xonsh", "elvish", "pwsh", "login"]
     private static let nodeNames: Set<String> = ["node", "npm", "npx", "pnpm", "yarn", "bun", "bunx", "deno", "tsx", "ts-node", "vite", "next"]
     private static let gitNames: Set<String> = ["git", "lazygit", "tig", "gitui", "gh"]
-    private static let agentsNames: Set<String> = ["claude", "codex", "aider", "gemini", "opencode", "amp", "cursor-agent", "goose", "crush", "qwen"]
-    private static let editorsNames: Set<String> = ["vim", "nvim", "vi", "hx", "helix", "nano", "emacs", "micro", "kak"]
+    private static let agentNames: Set<String> = ["claude", "codex", "aider", "gemini", "opencode", "amp", "cursor-agent", "goose", "crush", "qwen"]
+    private static let editorNames: Set<String> = ["vim", "nvim", "vi", "hx", "helix", "nano", "emacs", "micro", "kak"]
     private static let pythonNames: Set<String> = ["python", "python3", "ipython", "uv", "ruby", "irb", "cargo", "go", "swift", "make"]
     private static let remoteNames: Set<String> = ["ssh", "mosh", "mosh-client", "telnet", "kubectl", "docker"]
     private static let monitorNames: Set<String> = ["top", "htop", "btop", "btm", "glances", "watch", "tail", "less", "man"]
@@ -55,20 +53,28 @@ enum ProgramKind: Equatable {
         let lower = name.lowercased()
         let lowerTitle = title.lowercased()
 
-        if agentsNames.contains(lower) { return .agent }
+        if agentNames.contains(lower) { return .agent }
 
         // Agents distributed as native binaries are often named after their version
         // (e.g. ~/.local/share/claude/versions/2.0.1) so look at the path and title too.
-        if let path, agentsNames.contains(where: { path.lowercased().contains("/\($0)/") }) { return .agent }
+        if let path, agentNames.contains(where: { path.lowercased().contains("/\($0)/") }) { return .agent }
+
         if lowerTitle.contains("claude") || lowerTitle.contains("codex") || title.hasPrefix("✳") { return .agent }
 
-        if shellsNames.contains(lower) { return .shell }
+        if shellNames.contains(lower) { return .shell }
+
         if nodeNames.contains(lower) { return .node }
+
         if gitNames.contains(lower) { return .git }
-        if editorsNames.contains(lower) { return .editor }
+
+        if editorNames.contains(lower) { return .editor }
+
         if lower.hasPrefix("python") || pythonNames.contains(lower) { return .python }
+
         if remoteNames.contains(lower) { return .remote }
+
         if monitorNames.contains(lower) { return .monitor }
+
         return .other
     }
 }
@@ -88,20 +94,17 @@ struct PaneInfo: Equatable, Identifiable {
     /// A remote drako pane whose ssh client is gone (it waits for Enter to reconnect).
     var isDisconnected: Bool = false
 
-    /// The program is alive and, for a remote pane, connected.
-    var isRunning: Bool {
-        !hasExited && !isDisconnected
-    }
-
     /// "Node ~/Sites/project"
     var label: String {
         guard let cwd else { return program }
+
         return "\(program) \(cwd)"
     }
 
-    /// The last path component of the cwd, or the program name.
+    /// "Node project": the program and the last path component of the cwd.
     var shortLabel: String {
-        guard let cwd, cwd != "~", cwd != "/" else { return "\(program) \(cwd ?? "")".trimmingCharacters(in: .whitespaces) }
+        guard let cwd else { return program }
+
         return "\(program) \((cwd as NSString).lastPathComponent)"
     }
 
@@ -113,6 +116,7 @@ struct PaneInfo: Equatable, Identifiable {
 
         let process = foregroundProcess(view)
         let kind = ProgramKind.classify(name: process.name, path: process.path, title: view.title)
+
         return PaneInfo(
             id: view.id,
             kind: kind,
@@ -128,8 +132,9 @@ struct PaneInfo: Equatable, Identifiable {
     private static func makeDrako(_ view: Ghostty.SurfaceView, host: DrakoHost) -> PaneInfo {
         let title = view.title == defaultTitle ? "" : view.title
         let prompt = shellPrompt(in: title)
-        let name = prompt == nil ? title.split(separator: " ").first.map(String.init) ?? "shell" : "shell"
-        let kind = prompt != nil || title.isEmpty ? .shell : ProgramKind.classify(name: name, path: nil, title: title)
+        let isIdleShell = prompt != nil || title.isEmpty
+        let name = isIdleShell ? "shell" : title.split(separator: " ").first.map(String.init) ?? "shell"
+        let kind = isIdleShell ? .shell : ProgramKind.classify(name: name, path: nil, title: title)
         let cwd = prompt?.cwd ?? DrakoStore.shared.directory(of: view)
 
         var info = PaneInfo(
@@ -178,10 +183,7 @@ struct PaneInfo: Equatable, Identifiable {
         guard count > 0 else { return false }
 
         for child in children.prefix(Int(count)) where child > 0 {
-            var nameBuf = [CChar](repeating: 0, count: 256)
-            proc_name(child, &nameBuf, UInt32(nameBuf.count))
-
-            if String(cString: nameBuf) == name { return true }
+            if processName(child) == name { return true }
 
             if hasDescendant(named: name, of: child, depth: depth + 1) { return true }
         }
@@ -195,27 +197,38 @@ struct PaneInfo: Equatable, Identifiable {
     private static func foregroundProcess(_ view: Ghostty.SurfaceView) -> (name: String, path: String?) {
         guard let pid = view.surfaceModel?.foregroundPID, pid > 0 else { return ("shell", nil) }
 
-        var nameBuf = [CChar](repeating: 0, count: 256)
-        proc_name(Int32(pid), &nameBuf, UInt32(nameBuf.count))
-        let name = String(cString: nameBuf)
+        let name = processName(pid_t(pid))
 
         var pathBuf = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
         let len = proc_pidpath(Int32(pid), &pathBuf, UInt32(pathBuf.count))
         let path = len > 0 ? String(cString: pathBuf) : nil
 
         if name.isEmpty, let path { return ((path as NSString).lastPathComponent, path) }
+
         return (name.isEmpty ? "shell" : name, path)
+    }
+
+    private static func processName(_ pid: pid_t) -> String {
+        var buffer = [CChar](repeating: 0, count: 256)
+        proc_name(pid, &buffer, UInt32(buffer.count))
+
+        return String(cString: buffer)
     }
 
     private static func displayName(_ name: String, kind: ProgramKind, title: String) -> String {
         switch kind {
         case .agent:
             let lower = (name + " " + title).lowercased()
+
             if lower.contains("codex") { return "Codex" }
+
             if lower.contains("claude") || title.hasPrefix("✳") { return "Claude" }
+
             return name.capitalized
+
         case .node where name == "node":
             return "Node"
+
         default:
             return name
         }
@@ -225,48 +238,9 @@ struct PaneInfo: Equatable, Identifiable {
 
     static func abbreviate(_ path: String) -> String {
         if path == home { return "~" }
+
         if path.hasPrefix(home + "/") { return "~" + path.dropFirst(home.count) }
+
         return path
-    }
-}
-
-/// Information about this Mac shown in the titlebar.
-enum HostInfo {
-    /// e.g. "MacBook Pro di Thomas"
-    static let name: String = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
-
-    /// e.g. "MacBook Pro · Apple M3 Pro"
-    static let subtitle: String = {
-        var parts: [String] = []
-        if let product = productName {
-            // "MacBook Pro (14-inch, Nov 2023)" -> "MacBook Pro"
-            let base = product.split(separator: "(").first.map { $0.trimmingCharacters(in: .whitespaces) }
-            parts.append(base ?? product)
-        } else if let model = sysctlString("hw.model") {
-            parts.append(model)
-        }
-        if let cpu = sysctlString("machdep.cpu.brand_string") {
-            parts.append(cpu)
-        }
-        return parts.joined(separator: " · ")
-    }()
-
-    private static var productName: String? {
-        let entry = IORegistryEntryFromPath(kIOMainPortDefault, "IODeviceTree:/product")
-        guard entry != 0 else { return nil }
-        defer { IOObjectRelease(entry) }
-        guard let value = IORegistryEntryCreateCFProperty(entry, "product-name" as CFString, kCFAllocatorDefault, 0)?
-            .takeRetainedValue() as? Data else { return nil }
-        guard let raw = String(bytes: value, encoding: .utf8) else { return nil }
-        let string = raw.trimmingCharacters(in: CharacterSet(charactersIn: "\0"))
-        return string.isEmpty ? nil : string
-    }
-
-    private static func sysctlString(_ name: String) -> String? {
-        var size = 0
-        guard sysctlbyname(name, nil, &size, nil, 0) == 0, size > 0 else { return nil }
-        var buf = [CChar](repeating: 0, count: size)
-        guard sysctlbyname(name, &buf, &size, nil, 0) == 0 else { return nil }
-        return String(cString: buf)
     }
 }

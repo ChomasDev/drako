@@ -5,11 +5,9 @@ extension EnvironmentValues {
     @Entry var cardStyle: Bool = false
 }
 
-/// Wraps a single Ghostty surface (split pane) in a rounded card with a header row.
-///
-/// The Metal surface itself is not clipped; instead it is inset inside the card
-/// far enough to stay clear of the rounded corners, and the card background is
-/// drawn only around it so translucent backgrounds don't stack up.
+/// Wraps a single Ghostty surface (split pane) in a rounded card with a title
+/// pill. The surface fills the card edge to edge, its layer clipped to the
+/// card's rounded corners.
 struct CardPaneView<Content: View>: View {
     @ObservedObject var surfaceView: Ghostty.SurfaceView
     let content: Content
@@ -26,24 +24,35 @@ struct CardPaneView<Content: View>: View {
     }
 
     var body: some View {
-        let inset = CardTheme.cardInset
+        content
+            .onAppear { clipSurfaceToCard() }
+            .background(CardTheme.cardShape.fill(CardTheme.paneFill))
+            .overlay {
+                CardTheme.cardShape
+                    .strokeBorder(isFocused ? CardTheme.paneStrokeFocused : CardTheme.paneStroke, lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
+            .overlay(alignment: .topTrailing) {
+                CardPanePill(surfaceView: surfaceView, isFocused: isFocused)
+                    .padding(8)
+            }
+            .animation(.easeOut(duration: 0.12), value: isFocused)
+    }
 
-        VStack(spacing: 0) {
-            CardPaneHeader(surfaceView: surfaceView, isFocused: isFocused)
-                .frame(height: CardTheme.paneHeaderHeight)
+    /// The surface fills the whole card, so a program's own background (nvim)
+    /// reaches the edges: clip its layer to the card's rounded corners.
+    private func clipSurfaceToCard() {
+        guard let layer = surfaceView.layer else { return }
 
-            content
-                .padding(.horizontal, inset)
-                .padding(.bottom, inset)
-        }
-        .background {
-            CardGlassBackground(isFocused: isFocused)
-        }
-        .animation(.easeOut(duration: 0.12), value: isFocused)
+        layer.cornerRadius = CardTheme.cardRadius
+        layer.cornerCurve = .continuous
+        layer.masksToBounds = true
     }
 }
 
-private struct CardPaneHeader: View {
+/// The pane's title as a small pill in the top right corner. Hovering it
+/// reveals the split, zoom and close buttons.
+private struct CardPanePill: View {
     @ObservedObject var surfaceView: Ghostty.SurfaceView
     let isFocused: Bool
 
@@ -59,58 +68,24 @@ private struct CardPaneHeader: View {
             let info = PaneInfo.make(surfaceView)
 
             HStack(spacing: 6) {
-                if let host = info.host, !host.isLocal {
-                    HostBadge(host: host)
+                if hovering {
+                    paneButtons(info)
+
+                    Divider()
+                        .frame(height: 12)
                 }
 
-                Text(info.program)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(isFocused ? CardTheme.primaryText.opacity(0.8) : CardTheme.tertiaryText)
-
-                if let cwd = info.cwd {
-                    Text(cwd)
-                        .font(.system(size: 11))
-                        .foregroundStyle(CardTheme.tertiaryText)
-                        .truncationMode(.head)
-                }
-
-                Spacer(minLength: 8)
-
-                if info.isDisconnected {
-                    DisconnectedBadge {
-                        surfaceView.surfaceModel?.sendText("\r")
-                    }
-                }
-
-                // Only on hover: the header stays a quiet label otherwise.
-                HStack(spacing: 0) {
-                    PaneButton(symbol: "rectangle.split.2x1", help: "Split Right (⌥-click: on another machine)") {
-                        split(.right, action: "new_split:right")
-                    }
-                    PaneButton(symbol: "rectangle.split.1x2", help: "Split Down (⌥-click: on another machine)") {
-                        split(.down, action: "new_split:down")
-                    }
-
-                    if info.host != nil {
-                        SplitHostMenu(surfaceView: surfaceView)
-                    }
-
-                    PaneButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Zoom Pane") {
-                        perform("toggle_split_zoom")
-                    }
-                    PaneButton(symbol: "xmark", help: "Close Pane") {
-                        perform("close_surface")
-                    }
-                }
-                .opacity(hovering ? 1 : 0)
-                .allowsHitTesting(hovering)
+                title(info)
             }
             .lineLimit(1)
-            .padding(.leading, 12)
-            .padding(.trailing, 6)
+            .padding(.leading, hovering ? 4 : 10)
+            .padding(.trailing, 10)
+            .frame(height: 24)
+            .fixedSize()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .contentShape(Rectangle())
+        .background(Capsule().fill(hovering ? CardTheme.activePill : CardTheme.hoverPill))
+        .contentShape(Capsule())
+        .opacity(isFocused || hovering ? 1 : 0.7)
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
         .onTapGesture {
@@ -119,6 +94,60 @@ private struct CardPaneHeader: View {
         .contextMenu {
             MoveToTabMenu(surfaceView: surfaceView)
         }
+    }
+
+    @ViewBuilder
+    private func title(_ info: PaneInfo) -> some View {
+        if let host = info.host, !host.isLocal {
+            HostBadge(host: host)
+        }
+
+        Text(info.program)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(isFocused ? CardTheme.primaryText : CardTheme.secondaryText)
+
+        if let cwd = info.cwd {
+            Text(cwd)
+                .font(.system(size: 11))
+                .foregroundStyle(CardTheme.tertiaryText)
+                .truncationMode(.head)
+                .frame(maxWidth: 220, alignment: .leading)
+        }
+
+        if info.isDisconnected {
+            DisconnectedBadge {
+                surfaceView.surfaceModel?.sendText("\r")
+            }
+        }
+    }
+
+    private func paneButtons(_ info: PaneInfo) -> some View {
+        HStack(spacing: 0) {
+            PaneButton(symbol: "rectangle.split.2x1", help: "Split Right (⌥-click: on another machine)") {
+                split(.right, action: "new_split:right")
+            }
+            PaneButton(symbol: "rectangle.split.1x2", help: "Split Down (⌥-click: on another machine)") {
+                split(.down, action: "new_split:down")
+            }
+
+            if info.host != nil {
+                SplitHostMenu(surfaceView: surfaceView)
+            }
+
+            PaneButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Zoom Pane") {
+                perform("toggle_split_zoom")
+            }
+
+            if info.host != nil {
+                PaneButton(symbol: "pin.slash", help: "Detach (keeps running, see Detached in the sidebar)") {
+                    DrakoStore.shared.detach(surfaceView)
+                }
+            }
+            PaneButton(symbol: "xmark", help: "Close Pane") {
+                perform("close_surface")
+            }
+        }
+        .transition(.opacity.combined(with: .move(edge: .trailing)))
     }
 
     /// A split on this pane's machine, or ⌥-click to pick another one.
@@ -165,7 +194,7 @@ private struct SplitHostMenu: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        // Menu labels ignore foregroundStyle: dim it like the other header buttons.
+        // Menu labels ignore foregroundStyle: dim it like the other pill buttons.
         .opacity(0.45)
         .help("Split on another machine")
     }
@@ -262,7 +291,9 @@ private struct MoveToTabMenu: View {
     }
 
     private func title(of controller: TerminalController, index: Int) -> String {
-        let label = controller.titleOverride ?? controller.focusedSurface.map { PaneInfo.make($0).shortLabel } ?? "Terminal"
+        let label = controller.titleOverride
+            ?? controller.focusedSurface.map { PaneInfo.make($0).shortLabel }
+            ?? "Terminal"
 
         return "\(index + 1). \(label)"
     }
@@ -281,11 +312,8 @@ private struct PaneButton: View {
                 .font(.system(size: 10, weight: .regular))
                 .foregroundStyle(hovering ? CardTheme.primaryText : CardTheme.tertiaryText)
                 .frame(width: 22, height: 18)
-                .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(hovering ? CardTheme.hoverPill : .clear)
-                )
-                .contentShape(Rectangle())
+                .background(Capsule().fill(hovering ? CardTheme.activePill : .clear))
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }

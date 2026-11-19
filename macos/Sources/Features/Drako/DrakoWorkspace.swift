@@ -27,7 +27,7 @@ struct DrakoWorkspace: Codable, Equatable {
 
     var tabs: [Tab] = []
 
-    static let file = FileManager.default
+    private static let file = FileManager.default
         .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Drako/workspace.json")
 
@@ -65,14 +65,19 @@ struct DrakoWorkspace: Codable, Equatable {
         for terminal in terminals {
             let pane = Layout.pane(Pane(host: terminal.host, id: terminal.listed.id))
 
-            if let index = tabs.firstIndex(where: { $0.key == terminal.listed.tab }) {
-                // Equal columns: the panes so far keep n/(n+1) of the width.
-                let count = Double(tabs[index].layout.panes.count)
-                tabs[index].layout = .split(isVertical: false, ratio: count / (count + 1), first: tabs[index].layout, second: pane)
+            guard let index = tabs.firstIndex(where: { $0.key == terminal.listed.tab }) else {
+                tabs.append(Tab(key: terminal.listed.tab, layout: pane))
                 continue
             }
 
-            tabs.append(Tab(key: terminal.listed.tab, layout: pane))
+            // Equal columns: the panes so far keep n/(n+1) of the width.
+            let count = Double(tabs[index].layout.panes.count)
+
+            tabs[index].layout = .split(
+                isVertical: false,
+                ratio: count / (count + 1),
+                first: tabs[index].layout,
+                second: pane)
         }
 
         return DrakoWorkspace(tabs: tabs)
@@ -95,14 +100,20 @@ extension DrakoWorkspace.Layout {
             return isAlive(pane) ? self : nil
 
         case .split(let isVertical, let ratio, let first, let second):
-            let first = first.keeping(isAlive)
-            let second = second.keeping(isAlive)
-
-            guard let first else { return second }
-
-            guard let second else { return first }
-
-            return .split(isVertical: isVertical, ratio: ratio, first: first, second: second)
+            return .joining(
+                first.keeping(isAlive),
+                second.keeping(isAlive),
+                isVertical: isVertical,
+                ratio: ratio)
         }
+    }
+
+    /// A split of the two sides, or the side that is left when one is nil.
+    static func joining(_ first: Self?, _ second: Self?, isVertical: Bool, ratio: Double) -> Self? {
+        guard let first else { return second }
+
+        guard let second else { return first }
+
+        return .split(isVertical: isVertical, ratio: ratio, first: first, second: second)
     }
 }

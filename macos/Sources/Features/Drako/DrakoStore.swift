@@ -161,10 +161,12 @@ final class DrakoStore: ObservableObject {
 
             var parent: NSWindow?
 
-            for tab in saved.tabs {
-                guard let layout = tab.layout.keeping(isAlive),
-                      let controller = showTab(DrakoWorkspace.Tab(key: tab.key, title: tab.title, layout: layout), from: parent)
-                else { continue }
+            for var tab in saved.tabs {
+                guard let layout = tab.layout.keeping(isAlive) else { continue }
+
+                tab.layout = layout
+
+                guard let controller = showTab(tab, from: parent) else { continue }
 
                 parent = controller.window
 
@@ -182,7 +184,7 @@ final class DrakoStore: ObservableObject {
         }
     }
 
-    func openTab(on host: DrakoHost, from parent: NSWindow?) {
+    func openTab(on host: DrakoHost, from parent: NSWindow?, in directory: String? = nil) {
         remember(host)
 
         let key = Self.newTabKey()
@@ -190,7 +192,7 @@ final class DrakoStore: ObservableObject {
         Self.logger.notice("open tab on \(host.id, privacy: .public)")
 
         perform("Open a tab on \(host.name)") {
-            let id = try await DrakoCLI.newTerminal(tab: key, cwd: Self.startDirectory(host), on: host)
+            let id = try await DrakoCLI.newTerminal(tab: key, cwd: directory ?? Self.startDirectory(host), on: host)
             self.showTab(DrakoWorkspace.Tab(key: key, layout: .pane(Pane(host: host, id: id))), from: parent)
         }
     }
@@ -200,11 +202,15 @@ final class DrakoStore: ObservableObject {
         in controller: TerminalController,
         at view: Ghostty.SurfaceView,
         direction: SplitTree<Ghostty.SurfaceView>.NewDirection,
-        on chosenHost: DrakoHost? = nil
+        on chosenHost: DrakoHost? = nil,
+        in directory: String? = nil
     ) {
         let viewHost = host(of: view) ?? .local
         let host = chosenHost ?? viewHost
-        let cwd = host.isLocal && viewHost.isLocal ? view.pwd ?? NSHomeDirectory() : Self.startDirectory(host)
+
+        // A local split keeps the directory of the pane it splits.
+        let splitDirectory = host.isLocal && viewHost.isLocal ? view.pwd ?? NSHomeDirectory() : Self.startDirectory(host)
+        let cwd = directory ?? splitDirectory
         let key = tabKey(of: controller)
 
         remember(host)
@@ -215,7 +221,12 @@ final class DrakoStore: ObservableObject {
             let id = try await DrakoCLI.newTerminal(tab: key, cwd: cwd, on: host)
             let pane = Pane(host: host, id: id)
 
-            guard let newView = controller.newSplit(at: view, direction: direction, baseConfig: Self.attachConfig(pane)) else {
+            let newView = controller.newSplit(
+                at: view,
+                direction: direction,
+                baseConfig: Self.attachConfig(pane))
+
+            guard let newView else {
                 try await DrakoCLI.kill(id, on: host)
                 return
             }
@@ -226,13 +237,15 @@ final class DrakoStore: ObservableObject {
 
     /// "New terminal here": a pane on `host` in the tab of `controller`, or a
     /// new tab when there is no window.
-    func openTerminal(on host: DrakoHost, in controller: TerminalController?) {
-        guard let controller, let view = controller.focusedSurface ?? controller.surfaceTree.root?.rightmostLeaf() else {
-            openTab(on: host, from: nil)
+    func openTerminal(on host: DrakoHost, in controller: TerminalController?, directory: String? = nil) {
+        guard let controller,
+              let view = controller.focusedSurface ?? controller.surfaceTree.root?.rightmostLeaf()
+        else {
+            openTab(on: host, from: nil, in: directory)
             return
         }
 
-        openSplit(in: controller, at: view, direction: .right, on: host)
+        openSplit(in: controller, at: view, direction: .right, on: host, in: directory)
     }
 
     /// Shows a detached terminal in `target`, next to `anchor` (or its focused pane).
@@ -250,10 +263,10 @@ final class DrakoStore: ObservableObject {
 
     // MARK: Closing and moving
 
-    /// The user closed these panes: their terminals go away too. Panes whose
-    /// program already ended (shell exit, ctrl+\ detach) are left alone.
+    /// The user closed these panes: they go to the history and their terminals
+    /// go away too.
     func kill(_ views: some Sequence<Ghostty.SurfaceView>) {
-        let closing = views.filter { pane(of: $0) != nil && !$0.processExited }
+        let closing = views.filter { pane(of: $0) != nil }
 
         guard !closing.isEmpty else { return }
 
@@ -263,7 +276,12 @@ final class DrakoStore: ObservableObject {
             for view in closing where Self.controller(of: view) == nil {
                 guard let pane = self.pane(of: view) else { continue }
 
+                DrakoHistory.shared.archive(Self.record(of: view, host: pane.host))
                 self.panes.removeObject(forKey: view)
+
+                // The program already ended (shell exit, ctrl+\ detach): nothing to kill.
+                guard !view.processExited else { continue }
+
                 Self.logger.notice("kill \(pane.id, privacy: .public)")
 
                 Task {
@@ -281,7 +299,9 @@ final class DrakoStore: ObservableObject {
     /// same view moves, so the terminal stays attached. Within one tab the two
     /// panes swap places.
     func move(_ view: Ghostty.SurfaceView, to target: TerminalController, beside anchor: Ghostty.SurfaceView? = nil) {
-        guard let source = Self.controller(of: view), let node = source.surfaceTree.root?.node(view: view) else { return }
+        guard let source = Self.controller(of: view),
+              let node = source.surfaceTree.root?.node(view: view)
+        else { return }
 
         Self.logger.notice("move \(self.pane(of: view)?.id ?? "?", privacy: .public)")
 
@@ -303,7 +323,10 @@ final class DrakoStore: ObservableObject {
         // An undo would put the view back in both tabs.
         withoutUndo(source, target) {
             source.removeSurfaceNode(node)
-            target.replaceSurfaceTree(newTree.equalized(), moveFocusTo: view, moveFocusFrom: target.focusedSurface)
+            target.replaceSurfaceTree(
+                newTree.equalized(),
+                moveFocusTo: view,
+                moveFocusFrom: target.focusedSurface)
         }
 
         target.window?.tabGroup?.selectedWindow = target.window
@@ -313,23 +336,41 @@ final class DrakoStore: ObservableObject {
         }
     }
 
-    /// Moves a pane to a new tab of its own.
-    func moveToNewTab(_ view: Ghostty.SurfaceView) {
+    /// Takes a pane out of its tab but keeps its terminal running: it shows up
+    /// as detached until attached again.
+    @discardableResult
+    func detach(_ view: Ghostty.SurfaceView) -> Bool {
         guard let pane = pane(of: view),
               let source = Self.controller(of: view),
               let node = source.surfaceTree.root?.node(view: view)
-        else { return }
+        else { return false }
 
-        // The old view only detaches (unregistered, it isn't killed); the new tab attaches again.
+        Self.logger.notice("detach \(pane.id, privacy: .public)")
+
+        // Unregistered first, so closing the view doesn't kill the terminal.
         panes.removeObject(forKey: view)
 
         withoutUndo(source) {
             source.removeSurfaceNode(node)
         }
 
+        return true
+    }
+
+    /// Moves a pane to a new tab of its own.
+    func moveToNewTab(_ view: Ghostty.SurfaceView) {
+        guard let pane = pane(of: view),
+              let source = Self.controller(of: view)
+        else { return }
+
+        let parent = source.window
+
+        guard detach(view) else { return }
+
         let key = Self.newTabKey()
-        showTab(DrakoWorkspace.Tab(key: key, layout: .pane(pane)), from: source.window)
-        Self.ignoringFailure { try await DrakoCLI.move(pane.id, toTab: key, on: pane.host) }
+
+        showTab(DrakoWorkspace.Tab(key: key, layout: .pane(pane)), from: parent)
+        Self.moveTabHint(of: pane, to: key)
     }
 
     // MARK: Workspace
@@ -367,14 +408,11 @@ final class DrakoStore: ObservableObject {
             return pane(of: view).map { .pane($0) }
 
         case .split(let split):
-            let first = layout(of: split.left)
-            let second = layout(of: split.right)
-
-            guard let first else { return second }
-
-            guard let second else { return first }
-
-            return .split(isVertical: split.direction == .vertical, ratio: split.ratio, first: first, second: second)
+            return .joining(
+                layout(of: split.left),
+                layout(of: split.right),
+                isVertical: split.direction == .vertical,
+                ratio: split.ratio)
         }
     }
 
@@ -411,7 +449,7 @@ final class DrakoStore: ObservableObject {
     @discardableResult
     private func check(_ host: DrakoHost) -> Task<Void, Never> {
         let task = Task {
-            await self.list(host)
+            await self.updateState(of: host)
             self.checks[host] = nil
         }
 
@@ -420,7 +458,7 @@ final class DrakoStore: ObservableObject {
         return task
     }
 
-    private func list(_ host: DrakoHost) async {
+    private func updateState(of host: DrakoHost) async {
         let start = Date()
         var result = HostState()
 
@@ -513,26 +551,24 @@ final class DrakoStore: ObservableObject {
         return key
     }
 
-    /// Keeps drako's tab hint in step with the client; a failure doesn't matter.
     private func syncTabHint(of pane: Pane, to controller: TerminalController) {
-        let key = tabKey(of: controller)
+        Self.moveTabHint(of: pane, to: tabKey(of: controller))
+    }
 
-        Self.ignoringFailure { try await DrakoCLI.move(pane.id, toTab: key, on: pane.host) }
+    /// Keeps drako's tab hint in step with the client; a failure doesn't matter.
+    private static func moveTabHint(of pane: Pane, to key: String) {
+        Task {
+            do {
+                try await DrakoCLI.move(pane.id, toTab: key, on: pane.host)
+            } catch {
+                logger.info("drako tab hint not updated: \(error.localizedDescription)")
+            }
+        }
     }
 
     private static func nextMainTurn() async {
         await withCheckedContinuation { continuation in
             DispatchQueue.main.async { continuation.resume() }
-        }
-    }
-
-    private static func ignoringFailure(_ body: @escaping @Sendable () async throws -> Void) {
-        Task {
-            do {
-                try await body()
-            } catch {
-                logger.info("drako tab hint not updated: \(error.localizedDescription)")
-            }
         }
     }
 
@@ -566,7 +602,19 @@ final class DrakoStore: ObservableObject {
         var config = Ghostty.SurfaceConfiguration()
         config.command = DrakoCLI.attachCommand(id: pane.id, on: pane.host)
         config.workingDirectory = NSHomeDirectory()
+
         return config
+    }
+
+    private static func record(of view: Ghostty.SurfaceView, host: DrakoHost) -> DrakoHistory.Record {
+        let info = PaneInfo.make(view)
+
+        return DrakoHistory.Record(
+            program: info.program,
+            title: info.title,
+            cwd: info.cwd,
+            host: host,
+            closedAt: .now)
     }
 
     private static func startDirectory(_ host: DrakoHost) -> String? {

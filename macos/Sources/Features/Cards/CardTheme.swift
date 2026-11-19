@@ -7,24 +7,16 @@ enum CardTheme {
     // MARK: Metrics
 
     /// Height of the custom titlebar row (traffic lights, host, tabs).
-    static let titlebarHeight: CGFloat = 46
+    static let titlebarHeight: CGFloat = 54
 
     /// Gap between cards and between cards and the window edges.
     static let gap: CGFloat = 10
 
     /// Corner radius of each pane card.
-    static let cardRadius: CGFloat = 14
-
-    /// Height of the header row on top of every pane card.
-    static let paneHeaderHeight: CGFloat = 24
-
-    /// Inset of the terminal surface inside the card. Must be at least
-    /// ~0.3 * cardRadius so the (unclipped) Metal surface stays inside the
-    /// rounded corners.
-    static let cardInset: CGFloat = 6
+    static let cardRadius: CGFloat = 12
 
     /// Width of the sidebar.
-    static let sidebarWidth: CGFloat = 236
+    static let sidebarWidth: CGFloat = 264
 
     /// Space reserved on the left of the titlebar for the traffic lights.
     static let trafficLightsWidth: CGFloat = 78
@@ -36,45 +28,44 @@ enum CardTheme {
     static let lavender = Color(red: 0.769, green: 0.710, blue: 0.992) // #c4b5fd
     static let peach = Color(red: 0.992, green: 0.729, blue: 0.455) // #fdba74
     static let sky = Color(red: 0.576, green: 0.773, blue: 0.992) // #93c5fd
+    static let butter = Color(red: 0.97, green: 0.85, blue: 0.58)
 
     /// Tint drawn over the (blurred, translucent) window background, visible in
     /// the gaps between cards. Close to the terminal background (#171719) so
     /// the panes blend in.
     static let backdrop = Color(red: 0.075, green: 0.075, blue: 0.082).opacity(0.97)
 
-    /// Background of the tab track and sidebar.
-    static let track = Color.white.opacity(0.025)
-
-    /// Fill of the active tab pill.
+    /// Fill of an active pill (button, menu row).
     static let activePill = Color.white.opacity(0.06)
 
-    /// Fill of a hovered (inactive) tab pill.
+    /// Fill of a hovered pill.
     static let hoverPill = Color.white.opacity(0.035)
+
+    /// The selected tab: a lighter capsule with a hairline outline.
+    static let selectedTab = Color.white.opacity(0.1)
+    static let selectedTabStroke = Color.white.opacity(0.12)
 
     static let primaryText = Color(white: 0.88)
     static let secondaryText = primaryText.opacity(0.52)
     static let tertiaryText = primaryText.opacity(0.3)
 
-    /// Glass cards: a whisper of white over the blur, a touch more when focused.
-    static let glassTint = Color.white.opacity(0.015)
-    static let glassTintFocused = Color.white.opacity(0.04)
-
-    /// Charcoal tint of the glass itself, so a card is only slightly lighter
-    /// than the window and close to the terminal background it frames.
+    /// Charcoal tint of the Liquid Glass, so glass reads close to the terminal.
     static let glassBase = Color(red: 0.09, green: 0.09, blue: 0.1).opacity(0.62)
 
-    /// The card outline is lit from the top and fades towards the bottom.
+    /// The sidebar outline is lit from the top and fades towards the bottom.
     static let glassStroke = LinearGradient(
         colors: [.white.opacity(0.17), .white.opacity(0.05)],
         startPoint: .top,
         endPoint: .bottom)
 
-    static let glassStrokeFocused = LinearGradient(
-        colors: [.white.opacity(0.32), .white.opacity(0.11)],
-        startPoint: .top,
-        endPoint: .bottom)
-
     static let cardShadow = Color.black.opacity(0.28)
+
+    /// The terminal background (#171719), behind every pane card.
+    static let paneFill = Color(red: 0.09, green: 0.09, blue: 0.098)
+
+    /// The pane card outline; brighter on the focused pane.
+    static let paneStroke = Color.white.opacity(0.06)
+    static let paneStrokeFocused = Color.white.opacity(0.13)
 
     /// The sidebar row of the focused pane.
     static let selectedRow = Color.white.opacity(0.075)
@@ -84,33 +75,49 @@ enum CardTheme {
 
     static let idle = Color.white.opacity(0.18)
     static let warning = peach
+
+    static let cardShape = RoundedRectangle(cornerRadius: cardRadius, style: .continuous)
 }
 
-/// The Liquid Glass panel behind pane cards and the sidebar: translucent, a
-/// little lighter than the window, with a top-lit 1px outline and a soft shadow.
+/// The Liquid Glass panel behind the sidebar, with a top-lit outline and a
+/// soft shadow.
 struct CardGlassBackground: View {
-    var isFocused = false
-
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: CardTheme.cardRadius, style: .continuous)
-
-        glass(shape)
+        Color.clear
+            .cardGlass(in: CardTheme.cardShape)
             .overlay {
-                shape.fill(isFocused ? CardTheme.glassTintFocused : CardTheme.glassTint)
-            }
-            .overlay {
-                shape.strokeBorder(isFocused ? CardTheme.glassStrokeFocused : CardTheme.glassStroke, lineWidth: 1)
+                CardTheme.cardShape.strokeBorder(CardTheme.glassStroke, lineWidth: 1)
             }
             .shadow(color: CardTheme.cardShadow, radius: 10, y: 3)
             .allowsHitTesting(false)
     }
+}
 
+/// A round Liquid Glass button face for the titlebar.
+struct GlassCircleIcon: View {
+    let symbol: String
+    var isOn = false
+    var isHovered = false
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: 12.5, weight: .medium))
+            .foregroundStyle(isOn || isHovered ? CardTheme.primaryText : CardTheme.secondaryText)
+            .frame(width: 34, height: 34)
+            .background(Circle().fill(isOn ? CardTheme.activePill : .clear))
+            .contentShape(Circle())
+            .cardGlass(in: Circle())
+    }
+}
+
+extension View {
+    /// Liquid Glass in `shape` on macOS 26, a thin material before.
     @ViewBuilder
-    private func glass(_ shape: RoundedRectangle) -> some View {
+    func cardGlass<S: Shape>(in shape: S) -> some View {
         if #available(macOS 26, *) {
-            Color.clear.glassEffect(.regular.tint(CardTheme.glassBase), in: shape)
+            glassEffect(.regular.tint(CardTheme.glassBase), in: shape)
         } else {
-            shape.fill(.ultraThinMaterial)
+            background(.ultraThinMaterial, in: shape)
         }
     }
 }

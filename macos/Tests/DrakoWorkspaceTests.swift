@@ -8,7 +8,11 @@ struct DrakoWorkspaceTests {
     @Test func keepingDropsDeadPanesAndCollapsesSplits() {
         let alive = DrakoWorkspace.Pane(host: local, id: "a1")
         let dead = DrakoWorkspace.Pane(host: remote, id: "b2")
-        let layout = DrakoWorkspace.Layout.split(isVertical: false, ratio: 0.3, first: .pane(alive), second: .pane(dead))
+        let layout = DrakoWorkspace.Layout.split(
+            isVertical: false,
+            ratio: 0.3,
+            first: .pane(alive),
+            second: .pane(dead))
 
         #expect(layout.keeping { $0 == alive } == .pane(alive))
         #expect(layout.keeping { _ in false } == nil)

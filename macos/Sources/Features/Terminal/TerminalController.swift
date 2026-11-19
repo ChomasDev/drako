@@ -21,7 +21,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         let nib = switch config.macosTitlebarStyle {
         case .native: "Terminal"
         case .hidden: "TerminalHiddenTitlebar"
-        // newterm: the default ("transparent") and "tabs" styles use the card window.
+        // Drako: the default ("transparent") and "tabs" styles use the card window.
         case .transparent, .tabs: "TerminalCards"
         }
 

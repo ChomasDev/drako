@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// The custom titlebar row: traffic lights, host label, tab pills, "+" and the
-/// sidebar toggle. The native titlebar is hidden by `CardTerminalWindow`.
+/// The custom titlebar row: traffic lights, machine button, tab track, "+" and
+/// the sidebar toggle. The native titlebar is hidden by `CardTerminalWindow`.
 struct CardTitlebarView: View {
     @ObservedObject var chrome: CardChromeModel
     @AppStorage(CardChromeModel.sidebarKey) private var sidebarVisible = false
@@ -19,10 +19,15 @@ struct CardTitlebarView: View {
             TabTrack(chrome: chrome)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
+            NewTabMenu(chrome: chrome) {
+                GlassCircleIcon(symbol: "plus")
+            }
+            .help("New Tab (⌘T)")
+
             TitlebarIconButton(symbol: "sidebar.left", help: "Toggle Sidebar (⌘⇧S)", isOn: sidebarVisible) {
                 CardChromeModel.toggleSidebar()
             }
-            .padding(.trailing, 10)
+            .padding(.trailing, 12)
         }
         .frame(height: CardTheme.titlebarHeight)
         .background(WindowDragArea())
@@ -34,6 +39,7 @@ struct CardTitlebarView: View {
 /// The focused pane's machine; opens the list of every machine.
 private struct HostsButton: View {
     @ObservedObject var chrome: CardChromeModel
+    @ObservedObject private var drako = DrakoStore.shared
 
     @State private var isPresented = false
     @State private var hovering = false
@@ -44,33 +50,46 @@ private struct HostsButton: View {
         Button {
             isPresented.toggle()
         } label: {
-            HStack(spacing: 7) {
-                HostIcon(host: host, size: 13)
+            HStack(spacing: 9) {
+                HostIcon(host: host, size: 14)
 
-                Text(host.name)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(hovering || isPresented ? CardTheme.primaryText : CardTheme.secondaryText)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(host.name)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(CardTheme.primaryText)
+
+                    Text(HostStatusText.detail(host: host, state: drako.state(of: host)))
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(CardTheme.secondaryText)
+                }
+                .lineLimit(1)
+
+                Spacer(minLength: 0)
 
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(CardTheme.tertiaryText)
             }
-            .padding(.horizontal, 8)
-            .frame(height: 26)
-            .background(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(isPresented ? CardTheme.activePill : (hovering ? CardTheme.hoverPill : .clear))
-            )
-            .contentShape(Rectangle())
+            .padding(.leading, 14)
+            .padding(.trailing, 12)
+            // Fixed width: a changing host name or status must not shift the tabs.
+            .frame(width: 168, height: 36)
+            .background(Capsule().fill(fill))
+            .contentShape(Capsule())
+            .cardGlass(in: Capsule())
         }
         .buttonStyle(.plain)
-        .fixedSize()
         .onHover { hovering = $0 }
         .help("Machines")
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             HostsPopover(chrome: chrome) { isPresented = false }
         }
+    }
+
+    private var fill: Color {
+        if isPresented { return CardTheme.activePill }
+
+        return hovering ? CardTheme.hoverPill : .clear
     }
 }
 
@@ -83,12 +102,8 @@ private struct HostsPopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("MACHINES")
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(0.8)
-                .foregroundStyle(CardTheme.tertiaryText)
+            CardSectionTitle(title: "Machines")
                 .padding(.horizontal, 10)
-                .padding(.bottom, 4)
 
             ForEach(drako.hosts) { host in
                 HostPopoverRow(
@@ -104,13 +119,13 @@ private struct HostsPopover: View {
             Divider()
                 .padding(.vertical, 4)
 
-            PopoverAction(symbol: "pencil", title: "Edit hosts…") {
-                DrakoHost.editHostsFile()
+            PopoverAction(symbol: "slider.horizontal.3", title: "Manage machines…") {
+                HostsEditor.show()
                 dismiss()
             }
         }
-        .padding(8)
-        .frame(width: 320)
+        .padding(10)
+        .frame(width: 360)
         .onAppear { drako.refreshHosts(showChecking: true) }
     }
 }
@@ -124,23 +139,43 @@ private struct HostPopoverRow: View {
     @State private var hovering = false
 
     var body: some View {
-        HStack(spacing: 9) {
-            StatusDot(reachability: state.reachability)
+        HStack(spacing: 11) {
+            ZStack(alignment: .bottomTrailing) {
+                HostIcon(host: host, size: 15)
+                    .frame(width: 34, height: 34)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(CardTheme.activePill)
+                    )
 
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 5) {
+                StatusDot(reachability: state.reachability)
+                    .padding(2)
+                    .background(Circle().fill(CardTheme.paneFill))
+                    .offset(x: 3, y: 3)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
                     Text(host.name)
-                        .font(.system(size: 12, weight: isFocused ? .semibold : .regular))
+                        .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(CardTheme.primaryText)
 
                     if isFocused {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(CardTheme.secondaryText)
+                        Text("CURRENT")
+                            .font(.system(size: 8.5, weight: .bold))
+                            .tracking(0.5)
+                            .foregroundStyle(CardTheme.accent)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .background(Capsule().fill(CardTheme.accent.opacity(0.14)))
                     }
                 }
 
-                Text(HostStatusText.detail(host: host, state: state))
+                Text(host.sshTarget ?? "localhost")
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(CardTheme.secondaryText)
+
+                Text(HostStatusText.detail(host: host, state: state) + attachedText)
                     .font(.system(size: 10.5))
                     .foregroundStyle(CardTheme.tertiaryText)
             }
@@ -153,8 +188,8 @@ private struct HostPopoverRow: View {
                     .labelStyle(.titleAndIcon)
                     .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(hovering ? CardTheme.primaryText : CardTheme.secondaryText)
-                    .padding(.horizontal, 7)
-                    .frame(height: 22)
+                    .padding(.horizontal, 9)
+                    .frame(height: 24)
                     .background(Capsule().fill(hovering ? CardTheme.activePill : CardTheme.hoverPill))
             }
             .buttonStyle(.plain)
@@ -163,13 +198,27 @@ private struct HostPopoverRow: View {
             .opacity(state.reachability == .unreachable ? 0.4 : 1)
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(hovering ? CardTheme.hoverPill : .clear)
-        )
-        .contentShape(Rectangle())
+        .padding(.vertical, 8)
+        .background(Self.shape.fill(fill))
+        .contentShape(Self.shape)
         .onHover { hovering = $0 }
+    }
+
+    private static let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+
+    private var fill: Color {
+        if isFocused { return CardTheme.activePill }
+
+        return hovering ? CardTheme.hoverPill : .clear
+    }
+
+    /// " · 2 attached" when other clients hold some of this host's terminals.
+    private var attachedText: String {
+        let attached = state.terminals.filter(\.attached).count
+
+        guard attached > 0 else { return "" }
+
+        return " · \(attached) attached"
     }
 }
 
@@ -186,15 +235,17 @@ private struct PopoverAction: View {
                 Image(systemName: symbol)
                     .font(.system(size: 10, weight: .medium))
                     .frame(width: 14)
+
                 Text(title)
                     .font(.system(size: 12))
+
                 Spacer()
             }
             .foregroundStyle(hovering ? CardTheme.primaryText : CardTheme.secondaryText)
             .padding(.horizontal, 10)
-            .frame(height: 26)
+            .frame(height: 30)
             .background(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(hovering ? CardTheme.hoverPill : .clear)
             )
             .contentShape(Rectangle())
@@ -260,29 +311,17 @@ private struct TabTrack: View {
     @ObservedObject var chrome: CardChromeModel
 
     var body: some View {
-        HStack(spacing: 4) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 3) {
-                    ForEach(chrome.tabs) { tab in
-                        TabPill(tab: tab, canClose: chrome.tabs.count > 1, chrome: chrome)
-                    }
-                }
-                .padding(3)
+        // No ScrollView: its AppKit views report `mouseDownCanMoveWindow`, so
+        // clicks on a tab would drag the window instead of selecting it.
+        HStack(spacing: 2) {
+            ForEach(chrome.tabs) { tab in
+                TabPill(tab: tab, canClose: chrome.tabs.count > 1, chrome: chrome)
             }
-            .fixedSize(horizontal: false, vertical: true)
-
-            NewTabMenu(chrome: chrome) {
-                Image(systemName: "plus")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(CardTheme.secondaryText)
-                    .frame(width: 26, height: 26)
-                    .contentShape(Rectangle())
-            }
-            .help("New Tab (⌘T)")
-            .padding(.trailing, 3)
         }
-        .fixedSize(horizontal: true, vertical: false)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(3)
+        // Ideal width: each pill hugs its title instead of growing to its max width.
+        .fixedSize()
+        .cardGlass(in: Capsule())
     }
 }
 
@@ -297,23 +336,26 @@ private struct TabPill: View {
         let pane = tab.focusedPane
 
         HStack(spacing: 6) {
-            ProgramIcon(kind: pane?.kind ?? .other, size: 11)
+            ProgramIcon(kind: pane?.kind ?? .other, size: 12)
 
-            ForEach(tab.remoteHosts) { host in
-                Text(host.name)
-                    .font(.system(size: 11))
-                    .foregroundStyle(CardTheme.accent.opacity(0.75))
+            // Pinned tabs shrink to their icon, like pinned browser tabs.
+            if !tab.isPinned {
+                ForEach(tab.remoteHosts) { host in
+                    Text(host.name)
+                        .font(.system(size: 11))
+                        .foregroundStyle(CardTheme.accent.opacity(0.75))
+                }
+
+                Text(tab.label)
+                    .font(.system(size: 12.5, weight: tab.isSelected ? .medium : .regular))
+                    .foregroundStyle(tab.isSelected ? CardTheme.primaryText : CardTheme.secondaryText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 200, alignment: .leading)
             }
 
-            Text(tab.label)
-                .font(.system(size: 12))
-                .foregroundStyle(tab.isSelected ? CardTheme.primaryText : CardTheme.secondaryText)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: 160, alignment: .leading)
-
             ZStack {
-                if canClose && hovering {
+                if canClose && hovering && !tab.isPinned {
                     Button {
                         chrome.close(tab: tab.id)
                     } label: {
@@ -328,17 +370,22 @@ private struct TabPill: View {
             }
             .frame(width: 14, height: 14)
         }
-        .padding(.leading, 10)
-        .padding(.trailing, 5)
-        .frame(height: 26)
-        .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(tab.isSelected ? CardTheme.activePill : (hovering ? CardTheme.hoverPill : .clear))
-        )
-        .contentShape(Rectangle())
+        .padding(.leading, 12)
+        .padding(.trailing, 8)
+        .frame(height: 30)
+        .background {
+            if tab.isSelected {
+                Capsule()
+                    .fill(CardTheme.selectedTab)
+                    .overlay(Capsule().strokeBorder(CardTheme.selectedTabStroke, lineWidth: 1))
+            } else if hovering {
+                Capsule().fill(CardTheme.hoverPill)
+            }
+        }
+        .contentShape(Capsule())
         .onHover { hovering = $0 }
         .onTapGesture { chrome.select(tab: tab.id) }
-        .help(pane?.label ?? "")
+        .help(tab.isPinned ? tab.label : pane?.label ?? "")
     }
 }
 
@@ -368,6 +415,19 @@ struct NewTabMenu<Label: View>: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+    }
+}
+
+/// An uppercase section header, shared by the machines popover and the sidebar.
+struct CardSectionTitle: View {
+    let title: String
+
+    var body: some View {
+        Text(title.uppercased())
+            .font(.system(size: 10, weight: .semibold))
+            .tracking(0.8)
+            .foregroundStyle(CardTheme.tertiaryText)
+            .padding(.bottom, 4)
     }
 }
 
@@ -405,15 +465,7 @@ struct TitlebarIconButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(isOn || hovering ? CardTheme.primaryText : CardTheme.secondaryText)
-                .frame(width: 26, height: 26)
-                .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(isOn ? CardTheme.activePill : (hovering ? CardTheme.hoverPill : .clear))
-                )
-                .contentShape(Rectangle())
+            GlassCircleIcon(symbol: symbol, isOn: isOn, isHovered: hovering)
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
@@ -438,11 +490,14 @@ final class TrafficLightsView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+
         guard let window, buttons.isEmpty else { return }
 
         let types: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+
         for (index, type) in types.enumerated() {
             guard let button = NSWindow.standardWindowButton(type, for: window.styleMask) else { continue }
+
             button.setFrameOrigin(NSPoint(x: CGFloat(index) * 20, y: 0))
             addSubview(button)
             buttons.append(button)
@@ -494,6 +549,7 @@ private struct LegacyDragArea: NSViewRepresentable {
                 window?.performZoom(nil)
                 return
             }
+
             window?.performDrag(with: event)
         }
     }

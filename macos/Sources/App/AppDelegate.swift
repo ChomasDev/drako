@@ -246,7 +246,7 @@ class AppDelegate: NSObject,
         // Initial config loading
         ghosttyConfigDidChange(config: ghostty.config)
 
-        // newterm: card style menu items
+        // Drako: card style menu items
         installCardMenuItems()
 
         // Start our update checker.
@@ -1070,12 +1070,10 @@ class AppDelegate: NSObject,
     }
 
     @IBAction func newTab(_ sender: Any?) {
-        guard let window = TerminalController.preferredParent?.window else {
-            DrakoStore.shared.openTab(on: DrakoStore.shared.lastHost, from: nil)
-            return
-        }
-
-        DrakoStore.shared.openTab(on: DrakoStore.shared.lastHost, from: window)
+        DrakoStore.shared.openTab(
+            on: DrakoStore.shared.lastHost,
+            from: TerminalController.preferredParent?.window
+        )
     }
 
     @IBAction func closeAllWindows(_ sender: Any?) {

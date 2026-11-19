@@ -8,6 +8,7 @@ struct CardTabInfo: Equatable, Identifiable {
     let groupID: ObjectIdentifier
     let title: String?
     let isSelected: Bool
+    let isPinned: Bool
     let focusedPane: PaneInfo?
     let panes: [PaneInfo]
 
@@ -15,11 +16,15 @@ struct CardTabInfo: Equatable, Identifiable {
         title ?? focusedPane?.shortLabel ?? "Terminal"
     }
 
-    /// The remote machines this tab has panes on.
+    /// The remote machines this tab has panes on, without duplicates.
     var remoteHosts: [DrakoHost] {
-        panes.compactMap(\.host).filter { !$0.isLocal }.reduce(into: []) { hosts, host in
-            if !hosts.contains(host) { hosts.append(host) }
+        var hosts: [DrakoHost] = []
+
+        for host in panes.compactMap(\.host) where !host.isLocal && !hosts.contains(host) {
+            hosts.append(host)
         }
+
+        return hosts
     }
 }
 
@@ -30,13 +35,6 @@ struct DetachedTerminal: Equatable, Identifiable {
     let isAttachedElsewhere: Bool
 
     var id: String { "\(pane.host.id)/\(pane.id)" }
-}
-
-/// What the sidebar is dragging.
-enum CardDragItem: Equatable {
-    case tab(ObjectIdentifier)
-    case pane(UUID)
-    case detached(DrakoWorkspace.Pane)
 }
 
 /// The one source of truth for the card chrome of every window: tabs, panes,
@@ -51,11 +49,9 @@ final class CardWorkspace: ObservableObject {
 
     @Published private(set) var detached: [DetachedTerminal] = []
 
-    /// Tabs whose panes are hidden in the sidebar, shared by every window.
-    @Published var collapsedTabs: Set<ObjectIdentifier> = []
-
-    /// Set when a sidebar drag starts; drops read it instead of the pasteboard.
-    var dragged: CardDragItem?
+    /// Pinned tabs, kept first in the tab bar and the sidebar.
+    // shortcut: pins last for the session only; persist them with the drako tab key when restore needs them.
+    @Published private(set) var pinned: Set<ObjectIdentifier> = []
 
     private var isRefreshScheduled = false
     private var cancellables: Set<AnyCancellable> = []
@@ -98,15 +94,35 @@ final class CardWorkspace: ObservableObject {
         }
     }
 
+    func setPinned(_ id: ObjectIdentifier, _ isPinned: Bool) {
+        if isPinned {
+            pinned.insert(id)
+        } else {
+            pinned.remove(id)
+        }
+
+        setNeedsRefresh()
+    }
+
     func refresh() {
-        let newTabs = DrakoStore.orderedTabs.compactMap(Self.info(of:))
+        let controllers = DrakoStore.orderedTabs
+        let live = Set(controllers.compactMap { $0.window.map(ObjectIdentifier.init) })
+
+        if !pinned.isSubset(of: live) {
+            pinned.formIntersection(live)
+        }
+
+        let newTabs = controllers.compactMap { Self.info(of: $0, pinned: pinned) }
 
         if newTabs != tabs {
             tabs = newTabs
         }
 
         let newDetached = DrakoStore.shared.detachedTerminals().map {
-            DetachedTerminal(pane: $0.pane, cwd: $0.listed.cwd.isEmpty ? nil : $0.listed.cwd, isAttachedElsewhere: $0.listed.attached)
+            DetachedTerminal(
+                pane: $0.pane,
+                cwd: $0.listed.cwd.isEmpty ? nil : $0.listed.cwd,
+                isAttachedElsewhere: $0.listed.attached)
         }
 
         if newDetached != detached {
@@ -116,18 +132,18 @@ final class CardWorkspace: ObservableObject {
         DrakoStore.shared.saveWorkspace()
     }
 
-    private static func info(of controller: TerminalController) -> CardTabInfo? {
+    private static func info(of controller: TerminalController, pinned: Set<ObjectIdentifier>) -> CardTabInfo? {
         guard let window = controller.window else { return nil }
 
-        let group = window.tabGroup
         let panes = controller.surfaceTree.map { PaneInfo.make($0) }
         let focused = controller.focusedSurface.flatMap { view in panes.first { $0.id == view.id } }
 
         return CardTabInfo(
             id: ObjectIdentifier(window),
-            groupID: group.map(ObjectIdentifier.init) ?? ObjectIdentifier(window),
+            groupID: window.cardGroupID,
             title: controller.titleOverride,
-            isSelected: (group?.selectedWindow ?? window) === window,
+            isSelected: (window.tabGroup?.selectedWindow ?? window) === window,
+            isPinned: pinned.contains(ObjectIdentifier(window)),
             focusedPane: focused ?? panes.first,
             panes: panes)
     }
@@ -149,17 +165,15 @@ final class CardChromeModel: ObservableObject {
     init(controller: TerminalController) {
         self.controller = controller
 
-        cancellable = CardWorkspace.shared.objectWillChange
+        cancellable = workspace.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
     }
 
     /// The tabs of this window's tab group, in tab bar order.
     var tabs: [CardTabInfo] {
-        guard let window = controller?.window else { return [] }
+        guard let groupID = controller?.window?.cardGroupID else { return [] }
 
-        let group = window.tabGroup.map(ObjectIdentifier.init) ?? ObjectIdentifier(window)
-
-        return workspace.tabs.filter { $0.groupID == group }
+        return workspace.tabs.filter { $0.groupID == groupID }
     }
 
     var selectedTab: CardTabInfo? {
@@ -189,42 +203,62 @@ final class CardChromeModel: ObservableObject {
         (window(for: id)?.windowController as? TerminalController)?.closeTab(nil)
     }
 
-    /// Moves a tab before or after another tab of the same group.
-    func moveTab(_ id: ObjectIdentifier, to targetID: ObjectIdentifier, after: Bool) {
-        guard id != targetID,
-              let moving = window(for: id),
-              let target = window(for: targetID),
-              let group = target.tabGroup
+    func newTab(on host: DrakoHost) {
+        DrakoStore.shared.openTab(on: host, from: controller?.window)
+    }
+
+    /// Moves a tab to `index` in the tab bar, through Ghostty's move_tab so
+    /// its titlebar workarounds apply.
+    func move(tab id: ObjectIdentifier, to index: Int) {
+        let tabs = tabs
+
+        guard let current = tabs.firstIndex(where: { $0.id == id }),
+              let surface = controller(for: id)?.focusedSurface
         else { return }
 
-        let selected = group.selectedWindow
+        let offset = min(max(index, 0), tabs.count - 1) - current
 
-        NSAnimationContext.beginGrouping()
-        NSAnimationContext.current.duration = 0
-        group.removeWindow(moving)
-        target.addTabbedWindowSafely(moving, ordered: after ? .above : .below)
-        NSAnimationContext.endGrouping()
+        guard offset != 0 else { return }
 
-        if let selected {
-            group.selectedWindow = selected
-            selected.makeKeyAndOrderFront(nil)
+        select(tab: id)
+        _ = surface.surfaceModel?.perform(action: "move_tab:\(offset)")
+    }
+
+    /// Pinned tabs go first; an unpinned one goes right after them.
+    func togglePin(tab id: ObjectIdentifier) {
+        let tabs = tabs
+
+        guard let tab = tabs.first(where: { $0.id == id }) else { return }
+
+        let pinnedCount = tabs.filter(\.isPinned).count
+
+        workspace.setPinned(id, !tab.isPinned)
+        move(tab: id, to: tab.isPinned ? pinnedCount - 1 : pinnedCount)
+    }
+
+    func rename(tab id: ObjectIdentifier) {
+        controller(for: id)?.promptTabTitle()
+    }
+
+    func moveToNewWindow(tab id: ObjectIdentifier) {
+        window(for: id)?.moveTabToNewWindow(nil)
+        refresh()
+    }
+
+    /// Moves every pane of `id` into `target`; the emptied tab closes.
+    func merge(tab id: ObjectIdentifier, into target: ObjectIdentifier) {
+        guard let source = controller(for: id), let destination = controller(for: target) else { return }
+
+        for view in Array(source.surfaceTree) {
+            DrakoStore.shared.move(view, to: destination)
         }
 
         refresh()
     }
 
-    func toggleCollapsed(tab id: ObjectIdentifier) {
-        if workspace.collapsedTabs.remove(id) == nil {
-            workspace.collapsedTabs.insert(id)
-        }
-    }
-
-    func isCollapsed(tab id: ObjectIdentifier) -> Bool {
-        workspace.collapsedTabs.contains(id)
-    }
-
-    func newTab(on host: DrakoHost) {
-        DrakoStore.shared.openTab(on: host, from: controller?.window)
+    /// Runs a Ghostty binding action (equalize_splits, toggle_split_zoom…) on the focused pane of a tab.
+    func perform(_ action: String, in tab: ObjectIdentifier) {
+        _ = controller(for: tab)?.focusedSurface?.surfaceModel?.perform(action: action)
     }
 
     // MARK: Panes
@@ -245,20 +279,79 @@ final class CardChromeModel: ObservableObject {
         DrakoStore.shared.openTerminal(on: host, in: controller(for: selectedTab?.id))
     }
 
-    /// Drops a pane (from any tab) into `tab`, next to `anchor` when given.
-    func movePane(_ id: UUID, to tab: ObjectIdentifier, beside anchor: UUID? = nil) {
-        guard let view = Ghostty.SurfaceView.find(uuid: id), let target = controller(for: tab) else { return }
+    /// Takes a pane out of its tab; its terminal keeps running, detached.
+    func detach(pane id: UUID) {
+        guard let view = Ghostty.SurfaceView.find(uuid: id) else { return }
 
-        DrakoStore.shared.move(view, to: target, beside: anchor.flatMap(Ghostty.SurfaceView.find(uuid:)))
+        DrakoStore.shared.detach(view)
         refresh()
     }
 
-    /// Shows a detached terminal in `tab` (the selected one by default).
-    func attach(_ pane: DrakoWorkspace.Pane, to tab: ObjectIdentifier? = nil, beside anchor: UUID? = nil) {
-        guard let target = controller(for: tab ?? selectedTab?.id) else { return }
+    func move(pane id: UUID, to tab: ObjectIdentifier) {
+        guard let view = Ghostty.SurfaceView.find(uuid: id), let target = controller(for: tab) else { return }
 
-        DrakoStore.shared.attach(pane, to: target, beside: anchor.flatMap(Ghostty.SurfaceView.find(uuid:)))
+        DrakoStore.shared.move(view, to: target)
         refresh()
+    }
+
+    /// Only drako panes: their terminal outlives the view while it moves.
+    func moveToNewTab(pane id: UUID) {
+        guard let view = Ghostty.SurfaceView.find(uuid: id) else { return }
+
+        DrakoStore.shared.moveToNewTab(view)
+        refresh()
+    }
+
+    func close(pane id: UUID) {
+        _ = Ghostty.SurfaceView.find(uuid: id)?.surfaceModel?.perform(action: "close_surface")
+    }
+
+    /// A new terminal where an archived one was: same machine, same folder.
+    func reopen(_ record: DrakoHistory.Record) {
+        let directory = record.cwd.map { record.host.isLocal ? ($0 as NSString).expandingTildeInPath : $0 }
+
+        DrakoStore.shared.openTerminal(on: record.host, in: controller(for: selectedTab?.id), directory: directory)
+    }
+
+    /// Shows a detached terminal in the selected tab.
+    func attach(_ pane: DrakoWorkspace.Pane) {
+        guard let target = controller(for: selectedTab?.id) else { return }
+
+        DrakoStore.shared.attach(pane, to: target)
+        refresh()
+    }
+
+    // MARK: Drag and drop
+
+    private static let tabPrefix = "drako-tab:"
+    private static let panePrefix = "drako-pane:"
+
+    static func dragItem(tab id: ObjectIdentifier) -> String { tabPrefix + String(UInt(bitPattern: id)) }
+
+    static func dragItem(pane id: UUID) -> String { panePrefix + id.uuidString }
+
+    /// A pane dropped on a tab joins it; a tab dropped on a tab takes its
+    /// place and its pin.
+    func drop(_ item: String, on target: ObjectIdentifier) -> Bool {
+        if item.hasPrefix(Self.panePrefix) {
+            guard let id = UUID(uuidString: String(item.dropFirst(Self.panePrefix.count))) else { return false }
+
+            move(pane: id, to: target)
+            return true
+        }
+
+        let tabs = tabs
+
+        guard item.hasPrefix(Self.tabPrefix),
+              let bits = UInt(item.dropFirst(Self.tabPrefix.count)),
+              let source = tabs.first(where: { UInt(bitPattern: $0.id) == bits }),
+              source.id != target,
+              let index = tabs.firstIndex(where: { $0.id == target })
+        else { return false }
+
+        workspace.setPinned(source.id, tabs[index].isPinned)
+        move(tab: source.id, to: index)
+        return true
     }
 
     // MARK: Sidebar
@@ -267,6 +360,7 @@ final class CardChromeModel: ObservableObject {
         // Not animated on purpose: an animated width change resizes every
         // terminal many times, which makes shells redraw their prompt repeatedly.
         let defaults = UserDefaults.standard
+
         defaults.set(!defaults.bool(forKey: sidebarKey), forKey: sidebarKey)
     }
 
@@ -280,5 +374,12 @@ final class CardChromeModel: ObservableObject {
 
     private func controller(for id: ObjectIdentifier?) -> TerminalController? {
         id.flatMap { window(for: $0)?.windowController as? TerminalController }
+    }
+}
+
+private extension NSWindow {
+    /// Identifies the tab group this window belongs to; a lone window is its own group.
+    var cardGroupID: ObjectIdentifier {
+        tabGroup.map(ObjectIdentifier.init) ?? ObjectIdentifier(self)
     }
 }

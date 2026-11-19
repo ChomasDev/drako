@@ -1,6 +1,6 @@
 import AppKit
 
-/// newterm "card" window style.
+/// Drako "card" window style.
 ///
 /// The native titlebar (including the native tab bar) is hidden entirely and the
 /// SwiftUI `CardWindowLayout` draws its own titlebar with real traffic lights, a
@@ -19,6 +19,12 @@ class CardTerminalWindow: TerminalWindow {
             selector: #selector(fullscreenDidExit(_:)),
             name: .fullscreenDidExit,
             object: nil)
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(didEnterNativeFullScreen),
+            name: NSWindow.didEnterFullScreenNotification,
+            object: self)
     }
 
     deinit {
@@ -102,6 +108,15 @@ class CardTerminalWindow: TerminalWindow {
     }
 
     // MARK: Notifications
+
+    /// In native fullscreen AppKit moves the (hidden) titlebar into a child
+    /// window over the top of the screen, which would swallow clicks on our
+    /// titlebar: traffic lights and tabs.
+    @objc private func didEnterNativeFullScreen() {
+        for child in childWindows ?? [] where child.className == "NSToolbarFullScreenWindow" {
+            child.ignoresMouseEvents = true
+        }
+    }
 
     @objc private func fullscreenDidExit(_ notification: Notification) {
         guard let fullscreen = notification.object as? FullscreenBase else { return }

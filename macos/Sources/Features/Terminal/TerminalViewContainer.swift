@@ -23,9 +23,12 @@ class TerminalViewContainer: NSView {
     }
 
     /// `ignoresSafeArea`: the content draws its own titlebar (Drako cards), so
-    /// AppKit's titlebar safe area would only push scroll views up under it.
+    /// AppKit's titlebar safe area would only push scroll views up under it, and
+    /// clicks there must reach the tabs instead of dragging the window.
     init<Root: View>(ignoresSafeArea: Bool = false, @ViewBuilder rootView: () -> Root) {
-        let hostingView = NSHostingView(rootView: rootView())
+        let hostingView: NSHostingView<Root> = ignoresSafeArea
+            ? NonDraggableHostingView(rootView: rootView())
+            : NSHostingView(rootView: rootView())
 
         if ignoresSafeArea, #available(macOS 13.3, *) {
             hostingView.safeAreaRegions = []

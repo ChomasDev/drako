@@ -18,9 +18,9 @@ enum DrakoCLI {
         let attached: Bool
     }
 
-    static let remoteBinary = "/usr/local/bin/drako"
+    private static let remoteBinary = "/usr/local/bin/drako"
 
-    static let localBinary: String? = [
+    private static let localBinary: String? = [
         "/opt/homebrew/bin/drako",
         "\(NSHomeDirectory())/.local/bin/drako",
         "/usr/local/bin/drako",
@@ -100,10 +100,11 @@ enum DrakoCLI {
     private static func run(_ arguments: [String], on host: DrakoHost) async throws -> String {
         guard let target = host.sshTarget else {
             guard let localBinary else {
-                throw Failure(message: "drako is not installed on this Mac (looked in /opt/homebrew/bin and ~/.local/bin).")
+                throw Failure(
+                    message: "drako is not installed on this Mac (looked in /opt/homebrew/bin and ~/.local/bin).")
             }
 
-            return try await execute(localBinary, arguments, timeout: commandTimeout)
+            return try await execute(localBinary, arguments)
         }
 
         let remote = [remoteBinary] + arguments.map(shellQuote)
@@ -111,14 +112,18 @@ enum DrakoCLI {
         // Reuse a pane's shared connection but never become the master: a
         // persisting master keeps our stderr pipe open and the read never ends.
         // ssh keeps the first value of an option, so this one comes first.
-        let options = ["-o", "ControlMaster=no", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3"] + sshSharing
+        let options = [
+            "-o", "ControlMaster=no",
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=3",
+        ] + sshSharing
 
-        return try await execute(ssh, options + [target] + remote, timeout: commandTimeout)
+        return try await execute(ssh, options + [target] + remote)
     }
 
     /// Runs a process off the main thread and returns its stdout, or throws
-    /// with its stderr when it fails or takes longer than `timeout`.
-    private static func execute(_ executable: String, _ arguments: [String], timeout: TimeInterval) async throws -> String {
+    /// with its stderr when it fails or takes longer than `commandTimeout`.
+    private static func execute(_ executable: String, _ arguments: [String]) async throws -> String {
         try await Task.detached {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: executable)
@@ -135,7 +140,7 @@ enum DrakoCLI {
             try process.run()
 
             let watchdog = DispatchWorkItem { process.terminate() }
-            DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: watchdog)
+            DispatchQueue.global().asyncAfter(deadline: .now() + commandTimeout, execute: watchdog)
 
             let output = stdout.fileHandleForReading.readDataToEndOfFile()
             let errors = stderr.fileHandleForReading.readDataToEndOfFile()
@@ -143,13 +148,16 @@ enum DrakoCLI {
             watchdog.cancel()
 
             guard process.terminationStatus == 0 else {
-                let message = String(decoding: errors, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+                let message = text(errors).trimmingCharacters(in: .whitespacesAndNewlines)
+
+                guard message.isEmpty else { throw Failure(message: message) }
+
                 let command = ([executable] + arguments).joined(separator: " ")
 
-                throw Failure(message: message.isEmpty ? "\(command) failed (\(process.terminationStatus))" : message)
+                throw Failure(message: "\(command) failed (\(process.terminationStatus))")
             }
 
-            return String(decoding: output, as: UTF8.self)
+            return text(output)
         }.value
     }
 
@@ -164,6 +172,12 @@ enum DrakoCLI {
 
         return environment
     }()
+
+    /// Lossy on purpose: a stray invalid byte must not lose the whole output.
+    private static func text(_ data: Data) -> String {
+        // swiftlint:disable:next optional_data_string_conversion
+        String(decoding: data, as: UTF8.self)
+    }
 
     private static func isValidID(_ id: String) -> Bool {
         !id.isEmpty && id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber) }
