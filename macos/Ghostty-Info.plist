@@ -104,10 +104,12 @@
 			</array>
 		</dict>
 	</array>
+	<key>SUAutomaticallyUpdate</key>
+	<true/>
 	<key>SUEnableAutomaticChecks</key>
-	<false/>
+	<true/>
 	<key>SUPublicEDKey</key>
-	<string>wsNcGf5hirwtdXMVnYoxRIX/SqZQLMOsYlD3q3imeok=</string>
+	<string>3ZRMXsJ6gM7xTohdmBnWasTCvrT0MQiGvDdSP4DUjpk=</string>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>

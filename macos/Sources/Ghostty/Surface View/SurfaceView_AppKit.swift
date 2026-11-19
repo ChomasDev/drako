@@ -612,6 +612,9 @@ extension Ghostty {
             }
         }
 
+        /// The PTY title remains available for process detection while a user title is displayed.
+        var terminalTitle: String { titleFromTerminal ?? title }
+
         /// An override title for the surface set by the user or via AppleScript.
         /// When set, this takes precedence over the title reported by pty.
         /// This computed property is placed here for code locality.
@@ -1508,11 +1511,48 @@ extension Ghostty {
             if let text = text?.keyEventText {
                 return text.withCString { ptr in
                     key_ev.text = ptr
+                    mirror(key_ev)
                     return ghostty_surface_key(surface, key_ev)
                 }
             } else {
+                mirror(key_ev)
                 return ghostty_surface_key(surface, key_ev)
             }
+        }
+
+        /// Drako: the other terminals that receive what is typed here (broadcast input).
+        static var keyMirrorTargets: ((SurfaceView) -> [SurfaceView])?
+
+        /// Sends a key event to the broadcast targets too. Key bindings (close,
+        /// new tab, paste…) only ever act on this surface, except text editing
+        /// ones like ⌘⌫ or ⌥←, which only send text to the shell.
+        private func mirror(_ event: ghostty_input_key_s) {
+            guard let surface,
+                  let targets = Self.keyMirrorTargets?(self),
+                  !targets.isEmpty,
+                  Self.isTextEditingKey(event) || !ghostty_surface_key_is_binding(surface, event, nil)
+            else { return }
+
+            for target in targets {
+                guard let other = target.surface else { continue }
+
+                _ = ghostty_surface_key(other, event)
+            }
+        }
+
+        /// Delete, forward delete, arrows, home and end.
+        private static let textEditingKeyCodes: Set<UInt32> = [51, 117, 123, 124, 125, 126, 115, 119]
+
+        private static let shortcutMods = GHOSTTY_MODS_SHIFT.rawValue | GHOSTTY_MODS_CTRL.rawValue |
+            GHOSTTY_MODS_ALT.rawValue | GHOSTTY_MODS_SUPER.rawValue
+
+        /// A text editing key with at most one of ⌘, ⌥ or ⇧ (⌘⌥← stays a split binding).
+        private static func isTextEditingKey(_ event: ghostty_input_key_s) -> Bool {
+            guard textEditingKeyCodes.contains(event.keycode) else { return false }
+
+            let mods = event.mods.rawValue & shortcutMods
+
+            return mods.nonzeroBitCount <= 1 && mods & GHOSTTY_MODS_CTRL.rawValue == 0
         }
 
         private func shouldReplayCommittedPreeditKey(_ event: NSEvent) -> Bool {
@@ -1546,6 +1586,7 @@ extension Ghostty {
 
             return text.withCString { ptr in
                 key_ev.text = ptr
+                mirror(key_ev)
                 return ghostty_surface_key(surface, key_ev)
             }
         }

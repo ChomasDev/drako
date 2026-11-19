@@ -16,6 +16,7 @@ enum DrakoCLI {
 
         /// A client (this or another app) is attached right now.
         let attached: Bool
+        var cmd: String?
     }
 
     private static let remoteBinary = "/usr/local/bin/drako"
@@ -25,6 +26,8 @@ enum DrakoCLI {
         "\(NSHomeDirectory())/.local/bin/drako",
         "/usr/local/bin/drako",
     ].first { FileManager.default.isExecutableFile(atPath: $0) }
+
+    static let disconnectedTitle = "Drako: SSH disconnected"
 
     private static let ssh = "/usr/bin/ssh"
 
@@ -84,10 +87,11 @@ enum DrakoCLI {
         // No single quotes inside: the whole script is single quoted below.
         let script = """
             while :; do \
+            printf "\\033]2;ssh\\007"; \
             \(ssh) -t \(sshSharing.joined(separator: " ")) "$1" \(remoteBinary) attach "$2"; \
             status=$?; \
             [ $status -eq 255 ] || exit $status; \
-            printf "\\033[?1049l\\033[?25h\\r\\n\\033[1;33m● disconnected from %s\\033[0m  press Enter to reconnect\\r\\n" "$1"; \
+            printf "\\033]2;\(disconnectedTitle)\\007\\033[?1049l\\033[?25h\\r\\n\\033[1;33m● disconnected from %s\\033[0m  press Enter to reconnect\\r\\n" "$1"; \
             read -r _ || exit 0; \
             done
             """

@@ -1,0 +1,54 @@
+@import 'tailwindcss';
+
+/* Same palette as macos/Sources/Features/Cards/CardTheme.swift */
+@theme {
+  --color-ink: #0a0a0b;
+  --color-card: #171719;
+  --color-line: rgb(255 255 255 / 0.08);
+  --color-mint: #a7f3d0;
+  --color-lavender: #c4b5fd;
+  --color-peach: #fdba74;
+  --color-sky: #93c5fd;
+  --color-butter: #f7d994;
+  --color-rose: #fda4af;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', 'Segoe UI', sans-serif;
+  --font-mono: 'SF Mono', ui-monospace, 'JetBrains Mono', Menlo, monospace;
+}
+
+html {
+  background: var(--color-ink);
+  color: rgb(255 255 255 / 0.88);
+  color-scheme: dark;
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  background: var(--color-ink);
+  overflow-x: hidden;
+}
+
+::selection {
+  background: rgb(167 243 208 / 0.3);
+}
+
+.text-gradient {
+  background: linear-gradient(180deg, #fff 30%, rgb(255 255 255 / 0.55));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.glass {
+  background: rgb(23 23 25 / 0.62);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  border: 1px solid rgb(255 255 255 / 0.09);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}

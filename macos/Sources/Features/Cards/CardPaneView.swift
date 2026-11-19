@@ -56,6 +56,7 @@ private struct CardPanePill: View {
     @ObservedObject var surfaceView: Ghostty.SurfaceView
     let isFocused: Bool
 
+    @ObservedObject private var workspace = CardWorkspace.shared
     @State private var hovering = false
 
     private var controller: TerminalController? {
@@ -88,9 +89,6 @@ private struct CardPanePill: View {
         .opacity(isFocused || hovering ? 1 : 0.7)
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
-        .onTapGesture {
-            Ghostty.moveFocus(to: surfaceView)
-        }
         .contextMenu {
             MoveToTabMenu(surfaceView: surfaceView)
         }
@@ -98,11 +96,20 @@ private struct CardPanePill: View {
 
     @ViewBuilder
     private func title(_ info: PaneInfo) -> some View {
+        if workspace.isBroadcasting, workspace.selectedPanes.contains(surfaceView.id) {
+            Image(systemName: "dot.radiowaves.left.and.right")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(CardTheme.accent)
+                .help("Broadcasting: what you type here goes to every selected terminal")
+        }
+
         if let host = info.host, !host.isLocal {
             HostBadge(host: host)
         }
 
-        Text(info.program)
+        CardEditableTitle(title: info.displayName, field: "Terminal name") {
+            DrakoStore.shared.rename(surfaceView, to: $0)
+        }
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(isFocused ? CardTheme.primaryText : CardTheme.secondaryText)
 
@@ -112,11 +119,14 @@ private struct CardPanePill: View {
                 .foregroundStyle(CardTheme.tertiaryText)
                 .truncationMode(.head)
                 .frame(maxWidth: 220, alignment: .leading)
+                .onTapGesture { Ghostty.moveFocus(to: surfaceView) }
         }
 
         if info.isDisconnected {
             DisconnectedBadge {
-                surfaceView.surfaceModel?.sendText("\r")
+                if PaneInfo.make(surfaceView).isDisconnected {
+                    surfaceView.surfaceModel?.sendText("\r")
+                }
             }
         }
     }
@@ -348,7 +358,11 @@ struct CardWindowLayout<Content: View>: View {
 
             HStack(spacing: CardTheme.gap) {
                 if sidebarVisible {
+                    // The first window's sidebar can miss the update that adds its
+                    // first tab and keep showing "No tabs". A new identity once the
+                    // window has tabs rebuilds it with the current ones.
                     CardSidebarView(chrome: chrome)
+                        .id(chrome.tabs.isEmpty)
                 }
 
                 content

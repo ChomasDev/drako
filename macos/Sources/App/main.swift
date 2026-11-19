@@ -2,6 +2,9 @@ import AppKit
 import Cocoa
 import GhosttyKit
 
+// The menu bar agent is this same binary: it never starts Ghostty.
+MainActor.assumeIsolated { DrakoAgent.runIfRequested() }
+
 // Initialize Ghostty global state. We do this once right away because the
 // CLI APIs require it and it lets us ensure it is done immediately for the
 // rest of the app.

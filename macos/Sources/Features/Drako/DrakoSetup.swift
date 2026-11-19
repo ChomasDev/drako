@@ -1,7 +1,7 @@
 import Foundation
 
 /// Gets a new machine ready for drako: an ssh key it accepts, and the drako
-/// server cross-compiled on this Mac and installed in `/usr/local/bin`.
+/// server downloaded from GitHub Releases and installed in `/usr/local/bin`.
 enum DrakoSetup {
     typealias Log = @Sendable (String) -> Void
 
@@ -10,8 +10,6 @@ enum DrakoSetup {
     private static let home = FileManager.default.homeDirectoryForCurrentUser
 
     static let defaultKey = home.appendingPathComponent(".ssh/id_ed25519.pub")
-
-    private static let sourceKey = "drako.serverSource"
 
     private static let remoteBinary = "/usr/local/bin/drako"
 
@@ -101,49 +99,24 @@ enum DrakoSetup {
 
     // MARK: Server
 
-    /// Where the drako-server checkout is (`zig build` runs there).
-    static var serverSource: URL {
-        get {
-            UserDefaults.standard.string(forKey: sourceKey).map { URL(fileURLWithPath: $0) }
-                ?? home.appendingPathComponent("Project/drako-server")
-        }
-        set {
-            UserDefaults.standard.set(newValue.path, forKey: sourceKey)
-        }
-    }
+    /// Where the app downloads the server from: one binary per OS and CPU,
+    /// published by the drako-server release workflow.
+    private static let releases = URL(string: "https://github.com/ChomasDev/drako-server/releases/latest/download/")!
 
-    static var hasServerSource: Bool {
-        FileManager.default.fileExists(atPath: serverSource.appendingPathComponent("build.zig").path)
-    }
-
-    /// Builds drako for the host's OS and CPU, copies it there and installs it
-    /// as `/usr/local/bin/drako` (with `sudo` unless the user is root).
+    /// Downloads drako for the host's OS and CPU, copies it there and installs
+    /// it as `/usr/local/bin/drako` (with `sudo` unless the user is root).
     static func installServer(on target: String, sudoPassword: String, log: @escaping Log) async throws {
         log("→ Checking \(target)…")
         let uname = try await checkLogin(target)
         let zigTarget = try zigTarget(uname: uname)
         log("  \(uname) → \(zigTarget)")
 
-        guard hasServerSource else {
-            throw Failure(message: "The drako-server source isn't at \(serverSource.path). Choose its folder first.")
-        }
-
-        guard let zig = ["/opt/homebrew/bin/zig", "/usr/local/bin/zig"]
-            .first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
-            throw Failure(message: "zig is not installed on this Mac (brew install zig).")
-        }
-
-        let prefix = FileManager.default.temporaryDirectory.appendingPathComponent("drako-\(zigTarget)")
-        log("→ Building drako for \(zigTarget) (the first build takes a minute)…")
-        try await run(
-            zig,
-            ["build", "-Doptimize=ReleaseSafe", "-Dtarget=\(zigTarget)", "--prefix", prefix.path],
-            directory: serverSource,
-            log: log)
+        let binary = try await download(zigTarget, log: log)
+        defer { try? FileManager.default.removeItem(at: binary) }
 
         let upload = "/tmp/drako-install-\(UUID().uuidString.prefix(8))"
         log("→ Copying to \(target)…")
-        try await run("/usr/bin/scp", batch + ["-q", prefix.appendingPathComponent("bin/drako").path, "\(target):\(upload)"], log: log)
+        try await run("/usr/bin/scp", batch + ["-q", binary.path, "\(target):\(upload)"], log: log)
 
         log("→ Installing \(remoteBinary)…")
         // Only double quotes inside: the script is single quoted for the remote shell.
@@ -164,6 +137,20 @@ enum DrakoSetup {
 
         let count = try await checkServer(target)
         log("✓ drako is running on \(target) (\(count) terminals).")
+    }
+
+    private static func download(_ zigTarget: String, log: @escaping Log) async throws -> URL {
+        let url = releases.appendingPathComponent("drako-\(zigTarget)")
+        log("→ Downloading \(url.absoluteString)…")
+
+        let (file, response) = try await URLSession.shared.download(from: url)
+
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            try? FileManager.default.removeItem(at: file)
+            throw Failure(message: "There's no drako release for \(zigTarget) yet.")
+        }
+
+        return file
     }
 
     private static func zigTarget(uname: String) throws -> String {

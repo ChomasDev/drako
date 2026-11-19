@@ -23,21 +23,42 @@ struct CardPaneMap: View {
         }
     }
 
+    /// Narrower cells show only the icon.
+    private static let minNamedWidth: CGFloat = 47
+
     private func cell(_ pane: PaneInfo, width: CGFloat, height: CGFloat) -> some View {
         let focused = tab.isSelected && pane.id == tab.focusedPane?.id
+        let highlighted = dropTarget == pane.id || chrome.selectedPanes.contains(pane.id)
+        let showsName = width > Self.minNamedWidth
         let status = SidebarStatus(pane)
         let tint = status == .disconnected ? CardTheme.warning : pane.kind.tint
         let shape = RoundedRectangle(cornerRadius: 5, style: .continuous)
 
-        return Button {
-            chrome.focus(pane: pane.id, in: tab.id)
-        } label: {
+        return ZStack(alignment: showsName ? .leading : .center) {
+            Button {
+                if NSEvent.modifierFlags.contains(.shift) {
+                    chrome.toggleSelection(pane: pane.id)
+                } else {
+                    chrome.focus(pane: pane.id, in: tab.id)
+                }
+            } label: {
+                shape.fill(tint.opacity(focused ? 0.18 : 0.08))
+                    .contentShape(shape)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(pane.label), \(status.label)")
+            .accessibilityAddTraits(focused ? .isSelected : [])
+
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 5) {
                     Image(systemName: status == .disconnected ? "wifi.slash" : pane.kind.symbol)
-                    if width > 47 {
-                        Text(pane.program)
-                            .fontWeight(.medium)
+                        .allowsHitTesting(false)
+
+                    if showsName {
+                        CardEditableTitle(title: pane.displayName, field: "Terminal name") {
+                            chrome.rename(pane: pane.id, to: $0)
+                        }
+                        .fontWeight(.medium)
                     }
                 }
 
@@ -45,25 +66,22 @@ struct CardPaneMap: View {
                     Text((cwd as NSString).lastPathComponent)
                         .font(.system(size: 10))
                         .foregroundStyle(CardTheme.secondaryText)
+                        .allowsHitTesting(false)
                 }
             }
             .font(.system(size: 11))
             .lineLimit(1)
-            .padding(.horizontal, width > 47 ? 7 : 1)
-            .frame(width: width, height: height, alignment: width > 47 ? .leading : .center)
+            .padding(.horizontal, showsName ? 7 : 1)
             .foregroundStyle(tint)
-            .background(shape.fill(tint.opacity(focused ? 0.18 : 0.08)))
-            .overlay {
-                shape.strokeBorder(dropTarget == pane.id ? CardTheme.accent : tint.opacity(focused ? 0.85 : 0.25),
-                                   lineWidth: dropTarget == pane.id ? 2 : 1)
-            }
-            .clipShape(shape)
-            .contentShape(shape)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("\(pane.label), \(status.label)")
-        .accessibilityAddTraits(focused ? .isSelected : [])
-        .help("\(pane.label) · \(status.label)\nDrag onto another pane to swap or move.")
+        .frame(width: width, height: height)
+        .overlay {
+            shape.strokeBorder(highlighted ? CardTheme.accent : tint.opacity(focused ? 0.85 : 0.25),
+                               lineWidth: highlighted ? 2 : 1)
+                .allowsHitTesting(false)
+        }
+        .clipShape(shape)
+        .help("\(pane.label) · \(status.label)\nDrag onto another pane to swap or move. ⇧-click to select.")
         .contextMenu { CardPaneActions(pane: pane, tab: tab.id, chrome: chrome) }
         .draggable(CardChromeModel.dragItem(pane: pane.id))
         .dropDestination(for: String.self) { items, _ in
@@ -85,6 +103,22 @@ struct CardPaneActions: View {
 
     var body: some View {
         let others = chrome.tabs.filter { $0.id != tab }
+        let selection = chrome.selectedPanes
+
+        if selection.contains(pane.id), selection.count > 1 {
+            Section("\(selection.count) Selected") {
+                Toggle("Broadcast Input", isOn: $chrome.isBroadcasting)
+                Button("Detach Selected") { chrome.detachSelected() }
+                Button("Close Selected") { chrome.closeSelected() }
+                Button("Clear Selection") { chrome.clearSelection() }
+            }
+
+            Divider()
+        } else {
+            Button("Select (⇧-click)") { chrome.toggleSelection(pane: pane.id) }
+        }
+
+        Button("Rename Pane…") { Ghostty.SurfaceView.find(uuid: pane.id)?.promptTitle() }
 
         if !others.isEmpty {
             Menu("Move to Tab") {

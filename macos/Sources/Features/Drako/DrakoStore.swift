@@ -58,6 +58,7 @@ final class DrakoStore: ObservableObject {
     private var canSave = false
 
     private var lastSaved: DrakoWorkspace?
+    private var paneNames: [String: String] = [:]
 
     private static let lastHostKey = "drako.lastHost"
 
@@ -83,7 +84,30 @@ final class DrakoStore: ObservableObject {
             MainActor.assumeIsolated { self?.canSave = false }
         }
 
+        DistributedNotificationCenter.default().addObserver(
+            forName: DrakoClient.focusNotification,
+            object: DrakoClient.current,
+            queue: .main
+        ) { [weak self] notification in
+            let key = notification.userInfo?["tab"] as? String
+
+            MainActor.assumeIsolated { self?.focus(tabKey: key) }
+        }
+
         refreshHosts()
+    }
+
+    /// Brings the tab with `key` to the front, or any tab of this app.
+    func focus(tabKey key: String?) {
+        let tabs = Self.orderedTabs
+        let target = tabs.first { tabKeys.object(forKey: $0) as String? == key } ?? tabs.first
+
+        NSApp.activate(ignoringOtherApps: true)
+
+        guard let window = target?.window else { return }
+
+        window.tabGroup?.selectedWindow = window
+        window.makeKeyAndOrderFront(nil)
     }
 
     // MARK: Lookups
@@ -104,13 +128,30 @@ final class DrakoStore: ObservableObject {
         states[host] ?? HostState()
     }
 
-    /// The working directory `drako ls` reports for a pane.
-    func directory(of view: Ghostty.SurfaceView) -> String? {
+    func listedTerminal(for view: Ghostty.SurfaceView) -> DrakoCLI.ListedTerminal? {
         guard let pane = pane(of: view) else { return nil }
 
-        let cwd = state(of: pane.host).terminals.first { $0.id == pane.id }?.cwd
+        return state(of: pane.host).terminals.first { $0.id == pane.id }
+    }
 
-        return cwd?.isEmpty == false ? cwd : nil
+    func name(of pane: Pane) -> String? { paneNames[pane.storageKey] }
+
+    func rename(_ view: Ghostty.SurfaceView, to title: String) {
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        view.titleOverride = name.isEmpty ? nil : name
+
+        if let pane = pane(of: view) {
+            paneNames[pane.storageKey] = view.titleOverride
+            saveWorkspace()
+        }
+
+        CardWorkspace.shared.setNeedsRefresh()
+    }
+
+    private func register(_ pane: Pane, for view: Ghostty.SurfaceView) {
+        panes.setObject(PaneBox(pane), forKey: view)
+        view.titleOverride = name(of: pane)
     }
 
     /// Every tab of every window, in tab bar order.
@@ -153,7 +194,9 @@ final class DrakoStore: ObservableObject {
         Task {
             await checkAllHosts()
 
-            let saved = DrakoWorkspace.load() ?? .fromTabHints(liveTerminals())
+            let saved = DrakoWorkspace.load() ?? firstLaunchWorkspace()
+            paneNames = saved.paneNames ?? [:]
+
             let undo = (NSApp.delegate as? AppDelegate)?.undoManager
 
             undo?.disableUndoRegistration()
@@ -180,8 +223,24 @@ final class DrakoStore: ObservableObject {
 
             guard TerminalController.all.isEmpty else { return }
 
-            openTab(on: lastHost, from: nil)
+            // Created here like a restored tab, not in a task of its own: a first
+            // window made after this launch task ended never updated its SwiftUI views.
+            let host = lastHost
+
+            do {
+                try await createTab(on: host, key: Self.newTabKey(), from: nil, in: nil)
+            } catch {
+                openTab(on: host, from: nil)
+            }
         }
+    }
+
+    /// The first client groups the live terminals by tab hint. A later one starts
+    /// empty: the live terminals belong to the other clients.
+    private func firstLaunchWorkspace() -> DrakoWorkspace {
+        guard DrakoClient.isFirst else { return DrakoWorkspace() }
+
+        return .fromTabHints(liveTerminals())
     }
 
     func openTab(on host: DrakoHost, from parent: NSWindow?, in directory: String? = nil) {
@@ -192,9 +251,13 @@ final class DrakoStore: ObservableObject {
         Self.logger.notice("open tab on \(host.id, privacy: .public)")
 
         perform("Open a tab on \(host.name)") {
-            let id = try await DrakoCLI.newTerminal(tab: key, cwd: directory ?? Self.startDirectory(host), on: host)
-            self.showTab(DrakoWorkspace.Tab(key: key, layout: .pane(Pane(host: host, id: id))), from: parent)
+            try await self.createTab(on: host, key: key, from: parent, in: directory)
         }
+    }
+
+    private func createTab(on host: DrakoHost, key: String, from parent: NSWindow?, in directory: String?) async throws {
+        let id = try await DrakoCLI.newTerminal(tab: key, cwd: directory ?? Self.startDirectory(host), on: host)
+        showTab(DrakoWorkspace.Tab(key: key, layout: .pane(Pane(host: host, id: id))), from: parent)
     }
 
     /// A new pane next to `view`, on `view`'s host unless another one is picked.
@@ -231,7 +294,7 @@ final class DrakoStore: ObservableObject {
                 return
             }
 
-            self.panes.setObject(PaneBox(pane), forKey: newView)
+            self.register(pane, for: newView)
         }
     }
 
@@ -256,7 +319,7 @@ final class DrakoStore: ObservableObject {
 
         Self.logger.notice("attach \(pane.id, privacy: .public)")
 
-        panes.setObject(PaneBox(pane), forKey: view)
+        register(pane, for: view)
         target.surfaceTree = target.surfaceTree.equalized()
         syncTabHint(of: pane, to: target)
     }
@@ -277,6 +340,7 @@ final class DrakoStore: ObservableObject {
                 guard let pane = self.pane(of: view) else { continue }
 
                 DrakoHistory.shared.archive(Self.record(of: view, host: pane.host))
+                self.paneNames.removeValue(forKey: pane.storageKey)
                 self.panes.removeObject(forKey: view)
 
                 // The program already ended (shell exit, ctrl+\ detach): nothing to kill.
@@ -347,6 +411,8 @@ final class DrakoStore: ObservableObject {
 
         Self.logger.notice("detach \(pane.id, privacy: .public)")
 
+        paneNames[pane.storageKey] = view.titleOverride
+
         // Unregistered first, so closing the view doesn't kill the terminal.
         panes.removeObject(forKey: view)
 
@@ -367,9 +433,15 @@ final class DrakoStore: ObservableObject {
 
         guard detach(view) else { return }
 
-        let key = Self.newTabKey()
+        attachToNewTab(pane, from: parent)
+    }
 
-        showTab(DrakoWorkspace.Tab(key: key, layout: .pane(pane)), from: parent)
+    func attachToNewTab(_ pane: Pane, from parent: NSWindow?) {
+        let key = Self.newTabKey()
+        let tab = DrakoWorkspace.Tab(key: key, layout: .pane(pane))
+
+        guard showTab(tab, from: parent) != nil else { return }
+
         Self.moveTabHint(of: pane, to: key)
     }
 
@@ -391,16 +463,32 @@ final class DrakoStore: ObservableObject {
         var workspace = DrakoWorkspace()
 
         for controller in Self.orderedTabs {
+            syncPaneNames(of: controller)
+
             guard let layout = controller.surfaceTree.root.flatMap(layout(of:)) else { continue }
+
+            let label = controller.titleOverride ?? controller.focusedSurface.map { PaneInfo.make($0).shortLabel }
 
             workspace.tabs.append(DrakoWorkspace.Tab(
                 key: tabKey(of: controller),
                 title: controller.titleOverride,
                 isPinned: controller.isTabPinned ? true : nil,
-                layout: layout))
+                layout: layout,
+                label: label))
         }
 
+        workspace.paneNames = paneNames.isEmpty ? nil : paneNames
+
         return workspace
+    }
+
+    /// Picks up names set outside Drako too: the title prompt, AppleScript.
+    private func syncPaneNames(of controller: TerminalController) {
+        for view in controller.surfaceTree {
+            guard let pane = pane(of: view) else { continue }
+
+            paneNames[pane.storageKey] = view.titleOverride
+        }
     }
 
     private func layout(of node: SplitTree<Ghostty.SurfaceView>.Node) -> DrakoWorkspace.Layout? {
@@ -506,7 +594,7 @@ final class DrakoStore: ObservableObject {
         tabKeys.setObject(tab.key as NSString, forKey: controller)
         controller.isTabPinned = tab.isPinned ?? false
         controller.titleOverride = tab.title
-        panes.setObject(PaneBox(first), forKey: firstView)
+        register(first, for: firstView)
 
         guard case .split = tab.layout else { return controller }
 
@@ -529,7 +617,7 @@ final class DrakoStore: ObservableObject {
             guard pane != firstPane else { return .leaf(view: firstView) }
 
             let view = Ghostty.SurfaceView(app, baseConfig: Self.attachConfig(pane))
-            panes.setObject(PaneBox(pane), forKey: view)
+            register(pane, for: view)
 
             return .leaf(view: view)
 
@@ -613,7 +701,7 @@ final class DrakoStore: ObservableObject {
 
         return DrakoHistory.Record(
             program: info.program,
-            title: info.title,
+            title: info.customName ?? info.title,
             cwd: info.cwd,
             host: host,
             closedAt: .now)

@@ -1133,6 +1133,11 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
         window.contentView = container
 
+        // The sidebar search field also accepts keyboard input. Start in the shell.
+        if cardChrome != nil {
+            window.initialFirstResponder = focusedSurface
+        }
+
         // If we have a default size, we want to apply it.
         if let defaultSize {
             defaultSize.apply(to: window)

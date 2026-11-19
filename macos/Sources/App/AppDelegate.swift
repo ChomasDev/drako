@@ -238,6 +238,10 @@ class AppDelegate: NSObject,
         // Store our start time
         applicationLaunchTime = ProcessInfo.processInfo.systemUptime
 
+        // Drako: claim this app's client, and keep the menu bar agent running after we quit.
+        _ = DrakoClient.current
+        DrakoAgent.launchIfNeeded()
+
         // Check if secure input was enabled when we last quit.
         if UserDefaults.ghostty.bool(forKey: "SecureInput") != SecureInput.shared.enabled {
             toggleSecureInput(self)

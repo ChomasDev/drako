@@ -383,7 +383,6 @@ private struct HostDetail: View {
     @State private var key = DrakoSetup.publicKeys().first
     @State private var keys = DrakoSetup.publicKeys()
     @State private var password = ""
-    @State private var source = DrakoSetup.serverSource
     @State private var confirmRemove = false
 
     var body: some View {
@@ -507,23 +506,7 @@ private struct HostDetail: View {
 
     private var serverSetup: some View {
         SetupCard(title: "2 · drako server", done: isDone(model.server)) {
-            HStack(spacing: 8) {
-                Image(systemName: "folder")
-                    .foregroundStyle(CardTheme.tertiaryText)
-
-                Text(source.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
-                    .font(.system(size: 11.5, design: .monospaced))
-                    .foregroundStyle(DrakoSetup.hasServerSource ? CardTheme.secondaryText : CardTheme.warning)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-
-                Spacer()
-
-                Button("Change…", action: chooseSource)
-                    .buttonStyle(PillButtonStyle())
-            }
-
-            Text("Builds drako for the machine with zig on this Mac, copies it there and installs it in /usr/local/bin with sudo (using the password above, if needed).")
+            Text("Downloads the latest drako for the machine, copies it there and installs it in /usr/local/bin with sudo (using the password above, if needed).")
                 .caption()
 
             HStack {
@@ -554,19 +537,6 @@ private struct HostDetail: View {
 
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
-    }
-
-    private func chooseSource() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.directoryURL = source
-        panel.message = "Choose the drako-server checkout (the folder with build.zig)"
-
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-
-        DrakoSetup.serverSource = url
-        source = url
     }
 
     private func remove() {

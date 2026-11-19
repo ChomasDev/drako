@@ -1,0 +1,118 @@
+# Push a tag like v0.2.0 to ship Drako:
+#   1. builds, signs and notarizes Drako.dmg (macos/release-drako.sh)
+#   2. publishes it on the v0.2.0 release (the landing links to releases/latest)
+#   3. adds it to the rolling "updates" release, which holds the Sparkle
+#      appcast, the last few DMGs and the deltas between them
+#
+# Secrets (see the Drako notes in macos/release-drako.sh for the one-time setup):
+#   MACOS_CERTIFICATE        Developer ID Application .p12, base64
+#   MACOS_CERTIFICATE_PWD    its password
+#   NOTARY_KEY               App Store Connect API key (.p8 contents)
+#   NOTARY_KEY_ID, NOTARY_ISSUER
+#   SPARKLE_PRIVATE_KEY      generate_keys --account drako -x <file>
+name: Drako release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency: drako-release
+
+env:
+  FEED: updates
+  SPARKLE_VERSION: 2.9.6
+
+jobs:
+  release:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # the build number is the commit count
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+
+      - name: Xcode
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode_27*.app | sort -V | tail -1)"
+
+      - name: Sparkle tools
+        run: |
+          mkdir -p .action/sparkle && cd .action/sparkle
+          curl -fsSL "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE_VERSION/Sparkle-for-Swift-Package-Manager.zip" -o sparkle.zip
+          unzip -q sparkle.zip
+          echo "$PWD/bin" >> "$GITHUB_PATH"
+
+      - name: Version
+        run: |
+          echo "DRAKO_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          echo "DRAKO_BUILD=$(git rev-list --count HEAD)" >> "$GITHUB_ENV"
+
+      - name: Signing keychain
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          NOTARY_KEY: ${{ secrets.NOTARY_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER }}
+        run: |
+          KEYCHAIN_PWD=$(uuidgen)
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          echo "$NOTARY_KEY" > "$RUNNER_TEMP/notary.p8"
+
+          security create-keychain -p "$KEYCHAIN_PWD" build.keychain
+          security default-keychain -s build.keychain
+          security list-keychains -d user -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PWD" build.keychain
+          security set-keychain-settings -lut 7200 build.keychain
+          security import "$RUNNER_TEMP/cert.p12" -k build.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" build.keychain
+
+          # The same profile name release-drako.sh uses on the Mac.
+          xcrun notarytool store-credentials drako --key "$RUNNER_TEMP/notary.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER"
+          rm "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/notary.p8"
+
+      - name: Build GhosttyKit
+        run: zig build -Doptimize=ReleaseFast -Demit-macos-app=false -Dversion-string="$DRAKO_VERSION"
+
+      - name: Build, sign and notarize Drako.dmg
+        run: macos/release-drako.sh
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" macos/build/Release/Drako.dmg --title "Drako $DRAKO_VERSION" --generate-notes
+
+      - name: Update the Sparkle feed (appcast and deltas)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          gh release view "$FEED" >/dev/null 2>&1 \
+            || gh release create "$FEED" --prerelease --title "Auto-update feed" \
+                 --notes "Sparkle appcast and update files used by the app. Download Drako from the latest release instead."
+
+          mkdir feed
+          gh release download "$FEED" -D feed -p appcast.xml -p "*.dmg" || true
+          cp macos/build/Release/Drako.dmg "feed/Drako-$DRAKO_VERSION.dmg"
+
+          echo "$SPARKLE_PRIVATE_KEY" | generate_appcast --ed-key-file - \
+            --download-url-prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/$FEED/" \
+            --maximum-deltas 3 --maximum-versions 3 \
+            feed
+
+          gh release upload "$FEED" $(ls feed/*.xml feed/*.dmg feed/*.delta 2>/dev/null) --clobber
+
+          # generate_appcast moves the versions it dropped to old_updates/.
+          for file in feed/old_updates/*; do
+            [ -e "$file" ] && gh release delete-asset "$FEED" "$(basename "$file")" -y
+          done
+          true
+
+      - name: Clean up the keychain
+        if: always()
+        run: security delete-keychain build.keychain || true

@@ -1,0 +1,38 @@
+# Builds the landing page and deploys it to Cloudflare Pages.
+# Secrets: CLOUDFLARE_API_TOKEN (Pages: Edit), CLOUDFLARE_ACCOUNT_ID
+name: Landing
+
+on:
+  push:
+    branches: [drako]
+    paths: ["landing/**", ".github/workflows/landing.yml"]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: landing
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: landing/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          pnpm dlx wrangler@4 pages project create drako --production-branch main 2>/dev/null || true
+          pnpm dlx wrangler@4 pages deploy dist/client --project-name drako --branch main

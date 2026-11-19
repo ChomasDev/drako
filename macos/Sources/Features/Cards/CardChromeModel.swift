@@ -25,7 +25,8 @@ struct DetachedTerminal: Equatable, Identifiable {
     let cwd: String?
     let isAttachedElsewhere: Bool
 
-    var id: String { "\(pane.host.id)/\(pane.id)" }
+    var name: String?
+    var id: String { pane.storageKey }
 }
 
 /// The one source of truth for the card chrome of every window: tabs, panes,
@@ -39,6 +40,12 @@ final class CardWorkspace: ObservableObject {
     @Published private(set) var tabs: [CardTabInfo] = []
 
     @Published private(set) var detached: [DetachedTerminal] = []
+
+    /// Panes picked with shift-click, in any tab or window.
+    @Published var selectedPanes: Set<UUID> = []
+
+    /// Typing in a selected pane also types in the other selected ones.
+    @Published var isBroadcasting = false
 
     private var isRefreshScheduled = false
     private var cancellables: Set<AnyCancellable> = []
@@ -66,6 +73,10 @@ final class CardWorkspace: ObservableObject {
         Timer.scheduledTimer(withTimeInterval: Self.pollInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
         }
+
+        Ghostty.SurfaceView.keyMirrorTargets = { [weak self] source in
+            MainActor.assumeIsolated { self?.broadcastTargets(from: source) ?? [] }
+        }
     }
 
     /// Coalesces the many changes of one turn into one refresh, after AppKit
@@ -88,11 +99,24 @@ final class CardWorkspace: ObservableObject {
             tabs = newTabs
         }
 
+        // Closed panes leave the selection.
+        let live = Set(newTabs.flatMap { $0.panes.map(\.id) })
+        let selection = selectedPanes.intersection(live)
+
+        if selection != selectedPanes {
+            selectedPanes = selection
+        }
+
+        if selectedPanes.count < 2, isBroadcasting {
+            isBroadcasting = false
+        }
+
         let newDetached = DrakoStore.shared.detachedTerminals().map {
             DetachedTerminal(
                 pane: $0.pane,
                 cwd: $0.listed.cwd.isEmpty ? nil : $0.listed.cwd,
-                isAttachedElsewhere: $0.listed.attached)
+                isAttachedElsewhere: $0.listed.attached,
+                name: DrakoStore.shared.name(of: $0.pane))
         }
 
         if newDetached != detached {
@@ -100,6 +124,14 @@ final class CardWorkspace: ObservableObject {
         }
 
         DrakoStore.shared.saveWorkspace()
+    }
+
+    private func broadcastTargets(from source: Ghostty.SurfaceView) -> [Ghostty.SurfaceView] {
+        guard isBroadcasting, selectedPanes.contains(source.id) else { return [] }
+
+        return selectedPanes
+            .filter { $0 != source.id }
+            .compactMap { Ghostty.SurfaceView.find(uuid: $0) }
     }
 
     private static func info(of controller: TerminalController) -> CardTabInfo? {
@@ -174,8 +206,12 @@ final class CardChromeModel: ObservableObject {
     func select(tab id: ObjectIdentifier) {
         guard let target = window(for: id) else { return }
 
-        target.tabGroup?.selectedWindow = target
         target.makeKeyAndOrderFront(nil)
+
+        if let surface = (target.windowController as? TerminalController)?.focusedSurface {
+            target.makeFirstResponder(surface)
+        }
+
         refresh()
     }
 
@@ -219,6 +255,14 @@ final class CardChromeModel: ObservableObject {
 
     func rename(tab id: ObjectIdentifier) {
         controller(for: id)?.promptTabTitle()
+    }
+
+    /// An empty title restores the automatic one.
+    func setTitle(_ title: String, of tab: ObjectIdentifier) {
+        let title = title.trimmingCharacters(in: .whitespaces)
+
+        controller(for: tab)?.titleOverride = title.isEmpty ? nil : title
+        refresh()
     }
 
     func moveToNewWindow(tab id: ObjectIdentifier) {
@@ -314,6 +358,57 @@ final class CardChromeModel: ObservableObject {
         _ = Ghostty.SurfaceView.find(uuid: id)?.surfaceModel?.perform(action: "close_surface")
     }
 
+    // MARK: Selection
+
+    var selectedPanes: Set<UUID> { workspace.selectedPanes }
+
+    var isBroadcasting: Bool {
+        get { workspace.isBroadcasting }
+        set { workspace.isBroadcasting = newValue }
+    }
+
+    /// Shift-click: adds or removes a pane. The first pick also takes the
+    /// focused pane, so two clicks are never needed to start.
+    func toggleSelection(pane id: UUID) {
+        var selection = workspace.selectedPanes
+
+        if selection.isEmpty, let focused = selectedTab?.focusedPane?.id, focused != id {
+            selection.insert(focused)
+        }
+
+        if selection.remove(id) == nil {
+            selection.insert(id)
+        }
+
+        workspace.selectedPanes = selection
+    }
+
+    func clearSelection() {
+        workspace.selectedPanes = []
+        workspace.isBroadcasting = false
+    }
+
+    /// Only drako panes can be detached; the others are left in the selection.
+    func detachSelected() {
+        for id in workspace.selectedPanes {
+            guard let view = Ghostty.SurfaceView.find(uuid: id),
+                  DrakoStore.shared.pane(of: view) != nil
+            else { continue }
+
+            DrakoStore.shared.detach(view)
+        }
+
+        refresh()
+    }
+
+    func closeSelected() {
+        for id in workspace.selectedPanes {
+            close(pane: id)
+        }
+
+        clearSelection()
+    }
+
     /// A new terminal where an archived one was: same machine, same folder.
     func reopen(_ record: DrakoHistory.Record) {
         let directory = record.cwd.map { record.host.isLocal ? ($0 as NSString).expandingTildeInPath : $0 }
@@ -321,12 +416,31 @@ final class CardChromeModel: ObservableObject {
         DrakoStore.shared.openTerminal(on: record.host, in: controller(for: selectedTab?.id), directory: directory)
     }
 
-    /// Shows a detached terminal in the selected tab.
-    func attach(_ pane: DrakoWorkspace.Pane) {
-        guard let target = controller(for: selectedTab?.id) else { return }
+    func attach(_ pane: DrakoWorkspace.Pane, inCurrentTab: Bool) {
+        guard !isShown(pane) else { return }
 
-        DrakoStore.shared.attach(pane, to: target)
+        if inCurrentTab {
+            guard let target = controller(for: selectedTab?.id) else { return }
+
+            DrakoStore.shared.attach(pane, to: target)
+        } else {
+            DrakoStore.shared.attachToNewTab(pane, from: controller?.window)
+        }
+
         refresh()
+    }
+
+    /// Already in some tab: a double click must not attach it twice.
+    private func isShown(_ pane: DrakoWorkspace.Pane) -> Bool {
+        DrakoStore.orderedTabs.contains { tab in
+            tab.surfaceTree.contains { DrakoStore.shared.pane(of: $0) == pane }
+        }
+    }
+
+    func rename(pane id: UUID, to title: String) {
+        guard let view = Ghostty.SurfaceView.find(uuid: id) else { return }
+
+        DrakoStore.shared.rename(view, to: title)
     }
 
     // MARK: Drag and drop

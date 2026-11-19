@@ -49,6 +49,8 @@ enum ProgramKind: Equatable {
     private static let remoteNames: Set<String> = ["ssh", "mosh", "mosh-client", "telnet", "kubectl", "docker"]
     private static let monitorNames: Set<String> = ["top", "htop", "btop", "btm", "glances", "watch", "tail", "less", "man"]
 
+    static func isShell(_ name: String) -> Bool { shellNames.contains(name.lowercased()) }
+
     static func classify(name: String, path: String?, title: String) -> ProgramKind {
         let lower = name.lowercased()
         let lowerTitle = title.lowercased()
@@ -88,6 +90,9 @@ struct PaneInfo: Equatable, Identifiable {
     let title: String
     let hasExited: Bool
 
+    var customName: String?
+    var displayName: String { customName ?? program }
+
     /// The machine a drako pane runs on; nil for a plain Ghostty pane.
     var host: DrakoHost?
 
@@ -96,16 +101,16 @@ struct PaneInfo: Equatable, Identifiable {
 
     /// "Node ~/Sites/project"
     var label: String {
-        guard let cwd else { return program }
+        guard let cwd else { return displayName }
 
-        return "\(program) \(cwd)"
+        return "\(displayName) \(cwd)"
     }
 
     /// "Node project": the program and the last path component of the cwd.
     var shortLabel: String {
-        guard let cwd else { return program }
+        guard let cwd else { return displayName }
 
-        return "\(program) \((cwd as NSString).lastPathComponent)"
+        return "\(displayName) \((cwd as NSString).lastPathComponent)"
     }
 
     @MainActor
@@ -115,47 +120,98 @@ struct PaneInfo: Equatable, Identifiable {
         }
 
         let process = foregroundProcess(view)
-        let kind = ProgramKind.classify(name: process.name, path: process.path, title: view.title)
+        let kind = ProgramKind.classify(name: process.name, path: process.path, title: view.terminalTitle)
 
         return PaneInfo(
             id: view.id,
             kind: kind,
-            program: displayName(process.name, kind: kind, title: view.title),
+            program: displayName(process.name, kind: kind, title: view.terminalTitle),
             cwd: view.pwd.map(abbreviate),
-            title: view.title,
-            hasExited: view.processExited)
+            title: view.terminalTitle,
+            hasExited: view.processExited,
+            customName: view.titleOverride)
     }
 
     /// A drako pane's own process is just the attach client, so the program
     /// comes from the title the inner shell sets and the folder from `drako ls`.
     @MainActor
     private static func makeDrako(_ view: Ghostty.SurfaceView, host: DrakoHost) -> PaneInfo {
-        let title = view.title == defaultTitle ? "" : view.title
-        let prompt = shellPrompt(in: title)
-        let isIdleShell = prompt != nil || title.isEmpty
-        let name = isIdleShell ? "shell" : title.split(separator: " ").first.map(String.init) ?? "shell"
-        let kind = isIdleShell ? .shell : ProgramKind.classify(name: name, path: nil, title: title)
-        let cwd = prompt?.cwd ?? DrakoStore.shared.directory(of: view)
+        let title = view.terminalTitle == defaultTitle ? "" : view.terminalTitle
+        let listed = DrakoStore.shared.listedTerminal(for: view)
+        let name = drakoProgram(title: title, host: host, command: listed?.cmd)
+        let kind = name == "shell" ? .shell : ProgramKind.classify(name: name, path: nil, title: title)
+        let cwd = shellPrompt(in: title)?.cwd ?? listed.flatMap { $0.cwd.isEmpty ? nil : $0.cwd }
 
-        var info = PaneInfo(
+        return PaneInfo(
             id: view.id,
             kind: kind,
             program: displayName(name, kind: kind, title: title),
             cwd: cwd.map { host.isLocal ? abbreviate($0) : $0 },
             title: title,
             hasExited: view.processExited,
-            host: host)
+            customName: view.titleOverride,
+            host: host,
+            isDisconnected: isDisconnected(view, host: host, title: title))
+    }
 
-        if !host.isLocal, !view.processExited, let pid = view.surfaceModel?.foregroundPID, pid > 0 {
-            info.isDisconnected = !hasDescendant(named: "ssh", of: pid_t(pid))
+    @MainActor
+    private static func isDisconnected(_ view: Ghostty.SurfaceView, host: DrakoHost, title: String) -> Bool {
+        guard !host.isLocal, !view.processExited, title == DrakoCLI.disconnectedTitle else { return false }
+
+        guard let pid = view.surfaceModel?.foregroundPID else { return false }
+
+        return waitingForReconnect(pid_t(pid))
+    }
+
+    /// Only the local attach wrapper can be waiting for Return. A title sent by
+    /// the remote PTY alone must never enable sending a newline to an SSH session.
+    private static func waitingForReconnect(_ pid: pid_t) -> Bool {
+        guard pid > 0 else { return false }
+
+        var child: pid_t = 0
+        let count = proc_listchildpids(pid, &child, Int32(MemoryLayout<pid_t>.size))
+
+        switch processName(pid) {
+        case "sh": return count == 0
+        case "login": return count == 1 && child > 0 && processName(child) == "sh" && waitingForReconnect(child)
+        default: return false
+        }
+    }
+
+    static func drakoProgram(title: String, host: DrakoHost, command: String?) -> String {
+        if !host.isLocal && title == DrakoCLI.disconnectedTitle { return "ssh" }
+
+        let prompt = shellPrompt(in: title)
+        let program = title.split(separator: " ").first.map(String.init) ?? "shell"
+
+        if prompt == nil && program != "shell" && !ProgramKind.isShell(program) { return program }
+
+        // The remote shell can overwrite SSH's title with its own idle prompt.
+        let executable = command?.split(separator: " ").first.map { (String($0) as NSString).lastPathComponent }
+
+        if !host.isLocal || executable == "ssh" { return "ssh" }
+
+        if let prompt, !localPromptHosts.contains(shortHostName(prompt.host)) {
+            return "ssh"
         }
 
-        return info
+        return "shell"
+    }
+
+    private static let localPromptHosts: Set<String> = [
+        "localhost",
+        "127",
+        shortHostName(ProcessInfo.processInfo.hostName),
+    ]
+
+    /// "Mac.local" and "mac" are the same machine.
+    private static func shortHostName(_ host: String) -> String {
+        host.lowercased().components(separatedBy: ".")[0]
     }
 
     /// A shell's default title is its prompt, "user@host:~/dir": an idle shell
     /// in that folder, not a program called "user@host:~/dir".
-    static func shellPrompt(in title: String) -> (user: String, cwd: String)? {
+    static func shellPrompt(in title: String) -> (user: String, host: String, cwd: String)? {
         guard !title.contains(" "),
               let at = title.firstIndex(of: "@"),
               let colon = title[at...].firstIndex(of: ":")
@@ -165,31 +221,11 @@ struct PaneInfo: Equatable, Identifiable {
 
         guard !cwd.isEmpty else { return nil }
 
-        return (user: String(title[..<at]), cwd: cwd)
+        return (user: String(title[..<at]), host: String(title[title.index(after: at)..<colon]), cwd: cwd)
     }
 
     /// Ghostty's title before the program sets one.
     private static let defaultTitle = "👻"
-
-    private static let maxProcessDepth = 4
-
-    private static func hasDescendant(named name: String, of pid: pid_t, depth: Int = 0) -> Bool {
-        guard depth < maxProcessDepth else { return false }
-
-        var children = [pid_t](repeating: 0, count: 64)
-        // Returns a count of pids, not of bytes.
-        let count = proc_listchildpids(pid, &children, Int32(children.count * MemoryLayout<pid_t>.size))
-
-        guard count > 0 else { return false }
-
-        for child in children.prefix(Int(count)) where child > 0 {
-            if processName(child) == name { return true }
-
-            if hasDescendant(named: name, of: child, depth: depth + 1) { return true }
-        }
-
-        return false
-    }
 
     // MARK: Helpers
 

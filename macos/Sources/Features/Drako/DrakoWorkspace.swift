@@ -11,6 +11,8 @@ struct DrakoWorkspace: Codable, Equatable {
     struct Pane: Codable, Hashable {
         let host: DrakoHost
         let id: String
+
+        var storageKey: String { "\(host.id)/\(id)" }
     }
 
     indirect enum Layout: Codable, Equatable {
@@ -24,18 +26,23 @@ struct DrakoWorkspace: Codable, Equatable {
         var title: String?
         var isPinned: Bool?
         var layout: Layout
+
+        /// What the tab shows, for the menu bar agent. Not restored.
+        var label: String?
     }
 
     var tabs: [Tab] = []
-
-    private static let file = FileManager.default
-        .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("Drako/workspace.json")
+    var paneNames: [String: String]?
 
     private static let logger = Logger(subsystem: "dev.drako.Drako", category: "workspace")
 
-    /// nil when nothing was saved yet (first launch).
+    /// The workspace of this app's client; nil when nothing was saved yet.
+    @MainActor
     static func load() -> DrakoWorkspace? {
+        load(from: DrakoClient.workspaceFile(DrakoClient.current))
+    }
+
+    static func load(from file: URL) -> DrakoWorkspace? {
         guard let data = try? Data(contentsOf: file) else { return nil }
 
         do {
@@ -46,13 +53,16 @@ struct DrakoWorkspace: Codable, Equatable {
         }
     }
 
+    @MainActor
     func save() {
+        let file = DrakoClient.workspaceFile(DrakoClient.current)
+
         do {
             try FileManager.default.createDirectory(
-                at: Self.file.deletingLastPathComponent(),
+                at: file.deletingLastPathComponent(),
                 withIntermediateDirectories: true)
 
-            try JSONEncoder().encode(self).write(to: Self.file, options: .atomic)
+            try JSONEncoder().encode(self).write(to: file, options: .atomic)
         } catch {
             Self.logger.warning("couldn't save the workspace: \(error.localizedDescription)")
         }

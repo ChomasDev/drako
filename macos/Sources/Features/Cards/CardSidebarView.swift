@@ -34,6 +34,10 @@ struct CardSidebarView: View {
 
             FilterBar(query: $query, project: $project, projects: Set(all.compactMap(\.project)).sorted())
 
+            if !chrome.selectedPanes.isEmpty {
+                SelectionBar(chrome: chrome)
+            }
+
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     if showsActivity {
@@ -271,7 +275,7 @@ private struct SidebarEntry: Identifiable, Equatable {
         self.init(
             id: pane.id.uuidString,
             kind: pane.kind,
-            title: Self.title(program: pane.program, windowTitle: pane.title),
+            title: pane.customName ?? Self.title(program: pane.program, windowTitle: pane.title),
             cwd: pane.cwd,
             host: pane.host,
             status: SidebarStatus(pane))
@@ -288,7 +292,7 @@ private struct SidebarEntry: Identifiable, Equatable {
         self.init(
             id: terminal.id,
             kind: .shell,
-            title: terminal.pane.id,
+            title: terminal.name ?? terminal.pane.id,
             cwd: terminal.cwd.map { host.isLocal ? PaneInfo.abbreviate($0) : $0 },
             host: host,
             status: .detached)
@@ -495,28 +499,29 @@ private struct TabCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Button {
-                    chrome.select(tab: tab.id)
-                } label: {
-                    HStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    Button {
+                        chrome.select(tab: tab.id)
+                    } label: {
                         Text("\(group.index + 1)")
                             .monospacedDigit()
                             .foregroundStyle(CardTheme.secondaryText)
                             .frame(width: 19, height: 19)
                             .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(CardTheme.selectedTabStroke))
-
-                        Text(tab.label)
-                            .fontWeight(.semibold)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-
-                        Spacer(minLength: 0)
                     }
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Select " + tab.label)
+                    .draggable(CardChromeModel.dragItem(tab: tab.id))
+
+                    CardEditableTitle(title: tab.label, field: "Group name") {
+                        chrome.setTitle($0, of: tab.id)
+                    }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .draggable(CardChromeModel.dragItem(tab: tab.id))
+                        .fontWeight(.semibold)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
-                .buttonStyle(.plain)
-                .draggable(CardChromeModel.dragItem(tab: tab.id))
-                .help("Select tab or drag to reorder")
 
                 CardIconButton(symbol: tab.isPinned ? "pin.fill" : "pin",
                                help: tab.isPinned ? "Unpin Tab" : "Pin Tab",
@@ -677,6 +682,48 @@ private struct CardIconButton: View {
     }
 }
 
+/// Actions on the panes picked with shift-click.
+private struct SelectionBar: View {
+    @ObservedObject var chrome: CardChromeModel
+
+    var body: some View {
+        let count = chrome.selectedPanes.count
+
+        HStack(spacing: 6) {
+            Text(count == 1 ? "1 selected · ⇧-click more" : "\(count) selected")
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(CardTheme.primaryText)
+                .lineLimit(1)
+
+            Spacer(minLength: 4)
+
+            CardIconButton(symbol: "dot.radiowaves.left.and.right",
+                           help: chrome.isBroadcasting ? "Stop Broadcasting Input" : "Broadcast Input: typing goes to every selected terminal",
+                           isOn: chrome.isBroadcasting) {
+                chrome.isBroadcasting.toggle()
+            }
+            .disabled(count < 2)
+
+            CardIconButton(symbol: "rectangle.portrait.and.arrow.right", help: "Detach Selected") {
+                chrome.detachSelected()
+            }
+
+            CardIconButton(symbol: "trash", help: "Close Selected") {
+                chrome.closeSelected()
+            }
+
+            CardIconButton(symbol: "xmark", help: "Clear Selection") {
+                chrome.clearSelection()
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .background(
+            Capsule().fill(chrome.isBroadcasting ? CardTheme.accent.opacity(0.18) : CardTheme.hoverPill)
+        )
+    }
+}
+
 private struct TerminalRow: View {
     let entry: SidebarEntry
     @ObservedObject var chrome: CardChromeModel
@@ -686,36 +733,42 @@ private struct TerminalRow: View {
     var body: some View {
         HStack(spacing: 4) {
             Button(action: open) {
-                HStack(spacing: 8) {
-                    Image(systemName: entry.kind.symbol)
-                        .foregroundStyle(entry.kind.tint)
-                        .frame(width: 26, height: 28)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(entry.kind.tint.opacity(0.08)))
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(entry.title)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(CardTheme.primaryText)
-
-                        FolderLine(entry: entry)
-                    }
-                    .lineLimit(1)
-                }
-                .contentShape(Rectangle())
+                Image(systemName: entry.kind.symbol)
+                    .foregroundStyle(entry.kind.tint)
+                    .frame(width: 26, height: 28)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(entry.kind.tint.opacity(0.08)))
             }
             .buttonStyle(.plain)
-            .accessibilityHint(entry.record != nil ? "Reopen here" : entry.detached != nil ? "Attach to this tab" : "Focus pane")
+            .accessibilityLabel(entry.title)
+            .accessibilityHint(entry.record != nil ? "Reopen here" : entry.detached != nil ? "Attach in new tab" : "Focus pane")
+
+            VStack(alignment: .leading, spacing: 3) {
+                if let pane = entry.pane {
+                    CardEditableTitle(title: entry.title, field: "Terminal name") {
+                        chrome.rename(pane: pane.id, to: $0)
+                    }
+                } else {
+                    Button(entry.title, action: open)
+                        .buttonStyle(.plain)
+                }
+
+                Button(action: open) { FolderLine(entry: entry) }
+                    .buttonStyle(.plain)
+            }
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(CardTheme.primaryText)
+            .lineLimit(1)
 
             if entry.status == .disconnected, let pane = entry.pane {
                 Button("Reconnect") { chrome.reconnect(pane: pane.id) }
                     .font(.caption.weight(.medium))
                     .foregroundStyle(CardTheme.warning)
                     .buttonStyle(.plain)
-            } else if entry.detached != nil {
-                Button("Attach", action: open)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(CardTheme.lavender)
-                    .buttonStyle(.plain)
+            } else if let detached = entry.detached {
+                AttachButton { inCurrentTab in
+                    chrome.attach(detached, inCurrentTab: inCurrentTab)
+                }
+                .fixedSize()
             } else if let closed = entry.closedAt {
                 Text(Self.age(closed)).font(.caption2).foregroundStyle(.secondary)
             }
@@ -732,12 +785,23 @@ private struct TerminalRow: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(fill)
         )
+        .overlay {
+            if isPicked {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(CardTheme.accent, lineWidth: 1.5)
+                    .allowsHitTesting(false)
+            }
+        }
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
         .contextMenu { menu }
         .draggable(ifLet: entry.pane.map { CardChromeModel.dragItem(pane: $0.id) })
-        .help(entry.cwd ?? entry.title)
+        .help(entry.detached == nil ? (entry.cwd ?? entry.title) : AttachButton.hint)
+    }
+
+    private var isPicked: Bool {
+        entry.pane.map { chrome.selectedPanes.contains($0.id) } ?? false
     }
 
     private var fill: Color {
@@ -752,7 +816,8 @@ private struct TerminalRow: View {
             Button("Reopen Here") { chrome.reopen(record) }
             Button("Remove from History") { DrakoHistory.shared.remove(record.id) }
         } else if let detached = entry.detached {
-            Button("Attach to This Tab") { chrome.attach(detached) }
+            Button("Attach in New Tab") { chrome.attach(detached, inCurrentTab: false) }
+            Button("Attach to This Tab") { chrome.attach(detached, inCurrentTab: true) }
         } else if let pane = entry.pane, let tab = entry.tabID {
             CardPaneActions(pane: pane, tab: tab, chrome: chrome)
         }
@@ -765,11 +830,16 @@ private struct TerminalRow: View {
         }
 
         if let detached = entry.detached {
-            chrome.attach(detached)
+            chrome.attach(detached, inCurrentTab: NSEvent.modifierFlags.contains(.control))
             return
         }
 
         guard let pane = entry.pane, let tabID = entry.tabID else { return }
+
+        if NSEvent.modifierFlags.contains(.shift) {
+            chrome.toggleSelection(pane: pane.id)
+            return
+        }
 
         chrome.focus(pane: pane.id, in: tabID)
     }
