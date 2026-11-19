@@ -22,6 +22,7 @@ struct DrakoWorkspace: Codable, Equatable {
         /// Sent to `drako new --tab` as a grouping hint only.
         let key: String
         var title: String?
+        var isPinned: Bool?
         var layout: Layout
     }
 

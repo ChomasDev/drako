@@ -1,69 +1,100 @@
 import SwiftUI
 
-/// The sidebar (⌘⇧S): what is running right now, the tabs of this window
-/// as cards (pinned first) to reorder, pin, merge and rearrange by drag and
-/// drop or context menu, the detached terminals, and Done / Archived shelves.
 struct CardSidebarView: View {
     @ObservedObject var chrome: CardChromeModel
 
-    @ObservedObject private var drako = DrakoStore.shared
     @ObservedObject private var workspace = CardWorkspace.shared
     @ObservedObject private var history = DrakoHistory.shared
 
     /// Collapsed section ids, comma separated.
-    @AppStorage("drako.sidebar.collapsed") private var collapsed = ""
+    @AppStorage("drako.sidebar.collapsed") private var collapsed = "done,archived"
 
     @State private var query = ""
     @State private var project: String?
 
-    /// The bottom shelf (Done or Archived) shown open, like T3 Code's Settled.
-    @State private var openShelf: SidebarSection?
+    @AppStorage("drako.sidebar.activity") private var showsActivity = false
 
     var body: some View {
-        let groups = tabGroups
-        let running = rows { $0.status == .working || $0.status == .disconnected }
-        let detached = rows { $0.status == .detached }
+        let all = entries
+        let visible = all.filter { $0.matches(query: query, project: project) }
+        let groups = tabGroups(visible)
+        let working = visible.filter { $0.status == .working }
+        let disconnected = visible.filter { $0.status == .disconnected }
 
         VStack(alignment: .leading, spacing: 10) {
-            NewTabBar(chrome: chrome)
+            HStack(spacing: 3) {
+                modeButton("Layouts", symbol: "rectangle.split.2x1", activity: false, count: chrome.tabs.count)
+                modeButton("Activity", symbol: "waveform.path.ecg", activity: true,
+                           count: working.count + disconnected.count)
+            }
+            .padding(3)
+            .background(RoundedRectangle(cornerRadius: 9).fill(CardTheme.paneFill))
 
-            FilterBar(query: $query, project: $project, projects: projects)
+            FilterBar(query: $query, project: $project, projects: Set(all.compactMap(\.project)).sorted())
 
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 14) {
-                    section(.running, count: running.count) {
-                        ForEach(running) { entry in
-                            TerminalRow(entry: entry, chrome: chrome)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if showsActivity {
+                        activitySection(.disconnected, disconnected)
+                        activitySection(.running, working)
+                        activitySection(.detached, visible.filter { $0.status == .detached })
+                        activitySection(.done, visible.filter { $0.status == .done })
+                        activitySection(.archived, visible.filter { $0.status == .archived })
+
+                        if !visible.contains(where: { $0.status != .idle }) {
+                            emptyState("No tasks in progress")
                         }
-                    }
+                    } else {
+                        tabSection(.pinned, groups.filter(\.tab.isPinned))
+                        tabSection(.tabs, groups.filter { !$0.tab.isPinned })
 
-                    tabSection(.pinned, groups.filter(\.tab.isPinned))
-
-                    tabSection(.tabs, groups.filter { !$0.tab.isPinned })
-
-                    section(.detached, count: detached.count) {
-                        ForEach(detached) { entry in
-                            TerminalRow(entry: entry, chrome: chrome)
-                        }
-                    }
-
-                    if groups.isEmpty && detached.isEmpty {
-                        emptyState
+                        if groups.isEmpty { emptyState("No tabs in this window") }
                     }
                 }
-                .padding(.bottom, 12)
-                .animation(.snappy(duration: 0.22), value: visibleEntries.map(\.id))
-                .animation(.snappy(duration: 0.22), value: groups.map(\.id))
+                .padding(.bottom, 8)
             }
 
-            shelves
+            Divider()
+            NewTabBar(chrome: chrome)
         }
-        .padding(.horizontal, 8)
-        .padding(.top, 10)
+        .padding(10)
         .frame(width: CardTheme.sidebarWidth)
         .frame(maxHeight: .infinity, alignment: .top)
-        .background {
-            CardGlassBackground()
+        .background { CardGlassBackground() }
+    }
+
+    private func modeButton(_ title: String, symbol: String, activity: Bool, count: Int) -> some View {
+        let selected = showsActivity == activity
+
+        return Button {
+            showsActivity = activity
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: symbol)
+                Text(title)
+                Text("\(count)").font(.caption.monospacedDigit())
+            }
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(selected ? CardTheme.primaryText : CardTheme.secondaryText)
+            .frame(maxWidth: .infinity)
+            .frame(height: 30)
+            .background(RoundedRectangle(cornerRadius: 7).fill(selected ? CardTheme.selectedRow : .clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func activitySection(_ section: SidebarSection, _ entries: [SidebarEntry]) -> some View {
+        self.section(section, count: entries.count) {
+            ForEach(entries) { entry in
+                TerminalRow(entry: entry, chrome: chrome)
+            }
+
+            if section == .archived {
+                Button("Clear History") { history.clear() }
+                    .buttonStyle(.borderless)
+            }
         }
     }
 
@@ -99,64 +130,10 @@ struct CardSidebarView: View {
         }
     }
 
-    /// Done and Archived at the bottom: one line each with its count, the
-    /// open one lists its terminals above.
-    private var shelves: some View {
-        VStack(spacing: 2) {
-            if let openShelf {
-                shelfList(openShelf)
-            }
-
-            ForEach(SidebarSection.shelves, id: \.self) { section in
-                ShelfRow(
-                    section: section,
-                    count: shelfRows(section).count,
-                    isOpen: openShelf == section
-                ) {
-                    withAnimation(.snappy(duration: 0.22)) {
-                        openShelf = openShelf == section ? nil : section
-                    }
-                }
-            }
-        }
-        .padding(.bottom, 8)
-    }
-
-    private func shelfList(_ section: SidebarSection) -> some View {
-        VStack(alignment: .trailing, spacing: 2) {
-            if section == .archived, !history.records.isEmpty {
-                Button("Clear History") { history.clear() }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(CardTheme.tertiaryText)
-                    .padding(.horizontal, 8)
-            }
-
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 2) {
-                    ForEach(shelfRows(section)) { entry in
-                        TerminalRow(entry: entry, chrome: chrome)
-                    }
-                }
-            }
-            .frame(maxHeight: 280)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        .transition(.opacity.combined(with: .move(edge: .bottom)))
-    }
-
-    private func shelfRows(_ section: SidebarSection) -> [SidebarEntry] {
-        rows { section == .done ? $0.status == .done : $0.status == .archived }
-    }
-
-    private func rows(where include: (SidebarEntry) -> Bool) -> [SidebarEntry] {
-        visibleEntries.filter(include)
-    }
-
-    private var emptyState: some View {
-        Text(query.isEmpty && project == nil ? "No terminals yet" : "No matches")
-            .font(.system(size: 11.5))
-            .foregroundStyle(CardTheme.tertiaryText)
+    private func emptyState(_ text: String) -> some View {
+        Text(query.isEmpty && project == nil ? text : "No matches")
+            .font(.callout)
+            .foregroundStyle(CardTheme.secondaryText)
             .frame(maxWidth: .infinity)
             .padding(.top, 24)
     }
@@ -182,36 +159,18 @@ struct CardSidebarView: View {
         return panes + detached + archived
     }
 
-    private var visibleEntries: [SidebarEntry] {
-        entries.filter { $0.matches(query: query, project: project) }
-    }
-
-    /// The tabs in tab bar order with their panes that pass the filters; a
-    /// tab without any is hidden only while filtering.
-    private var tabGroups: [TabGroup] {
-        let visible = visibleEntries
-        let isFiltering = !query.trimmingCharacters(in: .whitespaces).isEmpty || project != nil
+    private func tabGroups(_ visible: [SidebarEntry]) -> [TabGroup] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let filtering = !query.isEmpty || project != nil
 
         return chrome.tabs.enumerated().compactMap { index, tab in
-            let panes = visible.filter { $0.tabID == tab.id && $0.status != .done }
+            let matches = visible.contains { $0.tabID == tab.id }
+            let titleMatches = project == nil && tab.label.localizedCaseInsensitiveContains(query)
 
-            if isFiltering && panes.isEmpty && !tab.label.localizedCaseInsensitiveContains(query) {
-                return nil
-            }
+            guard !filtering || matches || titleMatches else { return nil }
 
-            return TabGroup(tab: tab, index: index, entries: panes)
+            return TabGroup(tab: tab, index: index)
         }
-    }
-
-    /// The projects to filter by, in first seen order.
-    private var projects: [String] {
-        var seen: [String] = []
-
-        for project in entries.compactMap(\.project) where !seen.contains(project) {
-            seen.append(project)
-        }
-
-        return seen
     }
 
     // MARK: Collapsing
@@ -236,6 +195,7 @@ struct CardSidebarView: View {
 // MARK: Model
 
 enum SidebarSection: String, CaseIterable {
+    case disconnected
     case running
     case pinned
     case tabs
@@ -244,16 +204,12 @@ enum SidebarSection: String, CaseIterable {
     case archived
 
     var title: String { rawValue.capitalized }
-
-    /// Collapsed lines at the bottom, opened on demand.
-    static let shelves: [Self] = [.done, .archived]
 }
 
-/// One tab card: the tab and its panes.
+/// A tab and its position in the native tab strip.
 private struct TabGroup: Identifiable {
     let tab: CardTabInfo
     let index: Int
-    let entries: [SidebarEntry]
 
     var id: ObjectIdentifier { tab.id }
 }
@@ -288,26 +244,6 @@ enum SidebarStatus: Equatable {
         }
     }
 
-    var symbol: String {
-        switch self {
-        case .working: "bolt.fill"
-        case .idle: "moon.zzz.fill"
-        case .disconnected: "wifi.slash"
-        case .detached: "pin.slash.fill"
-        case .done: "checkmark.circle.fill"
-        case .archived: "archivebox.fill"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .working: CardTheme.sky
-        case .idle, .archived: CardTheme.tertiaryText
-        case .disconnected: CardTheme.warning
-        case .detached: CardTheme.lavender
-        case .done: CardTheme.mint
-        }
-    }
 }
 
 /// One sidebar row: a pane of a tab, a detached terminal or an archived one.
@@ -409,6 +345,8 @@ private struct SidebarEntry: Identifiable, Equatable {
               title.caseInsensitiveCompare(program) != .orderedSame,
               PaneInfo.shellPrompt(in: title) == nil
         else { return program }
+
+        if title.lowercased().hasPrefix(program.lowercased() + " ") { return title }
 
         return "\(program) · \(title)"
     }
@@ -569,17 +507,16 @@ private struct SectionHeader: View {
                     .font(.system(size: 8, weight: .bold))
                     .rotationEffect(.degrees(isCollapsed ? 0 : 90))
 
-                Text(section.title.uppercased())
+                Text(section.title)
                     .font(.system(size: 10, weight: .semibold))
-                    .tracking(0.8)
 
                 Text("\(count)")
                     .font(.system(size: 10, weight: .medium))
 
                 Spacer()
             }
-            .foregroundStyle(CardTheme.tertiaryText)
-            .padding(.horizontal, 8)
+            .foregroundStyle(CardTheme.secondaryText)
+            .padding(.horizontal, 4)
             .frame(height: 22)
             .contentShape(Rectangle())
         }
@@ -595,99 +532,129 @@ private struct TabCard: View {
     let canClose: Bool
     @ObservedObject var chrome: CardChromeModel
 
-    @State private var hovering = false
     @State private var isTargeted = false
 
     private var tab: CardTabInfo { group.tab }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            header
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Button {
+                    chrome.select(tab: tab.id)
+                } label: {
+                    HStack(spacing: 8) {
+                        Text("\(group.index + 1)")
+                            .monospacedDigit()
+                            .foregroundStyle(CardTheme.secondaryText)
+                            .frame(width: 19, height: 19)
+                            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(CardTheme.selectedTabStroke))
 
-            ForEach(group.entries) { entry in
-                TerminalRow(entry: entry, chrome: chrome, showsShortcut: false)
+                        Text(tab.label)
+                            .fontWeight(.semibold)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .draggable(CardChromeModel.dragItem(tab: tab.id))
+                .help("Select tab or drag to reorder")
+
+                CardIconButton(symbol: tab.isPinned ? "pin.fill" : "pin",
+                               help: tab.isPinned ? "Unpin Tab" : "Pin Tab",
+                               isOn: tab.isPinned) {
+                    chrome.togglePin(tab: tab.id)
+                }
+
+                Menu { menu } label: { Image(systemName: "ellipsis") }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .accessibilityLabel("Tab actions")
+            }
+            .font(.system(size: 12))
+            .foregroundStyle(CardTheme.primaryText)
+            .contextMenu { menu }
+
+            CardPaneMap(tab: tab, chrome: chrome)
+                .frame(height: tab.isSelected && tab.panes.count > 1 ? 94 : 38)
+
+            if tab.isSelected {
+                if tab.panes.count > 1 {
+                    HStack(spacing: 4) {
+                        ForEach(CardLayout.allCases, id: \.self) { layout in
+                            Button {
+                                chrome.arrange(tab: tab.id, as: layout)
+                            } label: {
+                                VStack(spacing: 4) {
+                                    if layout == .main {
+                                        HStack(spacing: 2) {
+                                            RoundedRectangle(cornerRadius: 1).strokeBorder()
+                                            VStack(spacing: 2) {
+                                                RoundedRectangle(cornerRadius: 1).strokeBorder()
+                                                RoundedRectangle(cornerRadius: 1).strokeBorder()
+                                            }
+                                            .frame(width: 5)
+                                        }
+                                        .frame(width: 17, height: 12)
+                                    } else {
+                                        Image(systemName: layout.symbol)
+                                    }
+                                    Text(layout.rawValue).font(.system(size: 10))
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 6)
+                                .background(RoundedRectangle(cornerRadius: 5).fill(CardTheme.hoverPill))
+                            }
+                            .buttonStyle(.plain)
+                            .help(layout == .main ? "Enlarge the focused pane and stack the others" : "Arrange panes in \(layout.rawValue.lowercased())")
+                        }
+                    }
+                }
+
+                HStack {
+                    Button {
+                        chrome.perform("new_split:right", in: tab.id)
+                    } label: {
+                        Label("Split pane", systemImage: "plus")
+                    }
+
+                    Spacer()
+
+                    if let pane = tab.focusedPane {
+                        Menu("Move pane") {
+                            ForEach(chrome.tabs.filter { $0.id != tab.id }) { other in
+                                Button(other.label) { chrome.move(pane: pane.id, to: other.id) }
+                            }
+
+                            if pane.host != nil {
+                                Button("New Tab") { chrome.moveToNewTab(pane: pane.id) }
+                            }
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .disabled(chrome.tabs.count == 1 && pane.host == nil)
+                    }
+                }
+                .font(.system(size: 11, weight: .medium))
+                .buttonStyle(.plain)
+                .foregroundStyle(CardTheme.secondaryText)
             }
         }
-        .padding(3)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(tab.isSelected ? CardTheme.hoverPill : .clear)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(stroke, lineWidth: 1)
-        )
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 9).fill(tab.isSelected ? CardTheme.activePill : .clear))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9)
+                .strokeBorder(isTargeted ? CardTheme.accent : CardTheme.paneStroke)
+                .allowsHitTesting(false)
+        }
         .dropDestination(for: String.self) { items, _ in
             items.first.map { chrome.drop($0, on: tab.id) } ?? false
         } isTargeted: {
             isTargeted = $0
         }
-        .animation(.easeOut(duration: 0.12), value: isTargeted)
-    }
-
-    private var stroke: Color {
-        if isTargeted { return CardTheme.accent.opacity(0.6) }
-
-        return tab.isSelected ? CardTheme.paneStroke : .clear
-    }
-
-    private var header: some View {
-        HStack(spacing: 7) {
-            Text(group.index < 9 ? "⌘\(group.index + 1)" : "\(group.index + 1)")
-                .font(.system(size: 10, weight: .medium).monospacedDigit())
-                .foregroundStyle(CardTheme.tertiaryText)
-                .frame(width: 20, alignment: .leading)
-
-            Text(tab.label)
-                .font(.system(size: 12, weight: tab.isSelected ? .semibold : .medium))
-                .foregroundStyle(tab.isSelected ? CardTheme.primaryText : CardTheme.secondaryText)
-                .lineLimit(1)
-                .truncationMode(.middle)
-
-            Spacer(minLength: 4)
-
-            if hovering {
-                CardIconButton(symbol: tab.isPinned ? "pin.slash" : "pin", help: tab.isPinned ? "Unpin Tab" : "Pin Tab") {
-                    chrome.togglePin(tab: tab.id)
-                }
-
-                if tab.panes.count > 1 {
-                    CardIconButton(symbol: "square.split.2x1", help: "Equalize Splits") {
-                        chrome.perform("equalize_splits", in: tab.id)
-                    }
-                }
-
-                if canClose {
-                    CardIconButton(symbol: "xmark", help: "Close Tab") {
-                        chrome.close(tab: tab.id)
-                    }
-                }
-            } else {
-                if tab.panes.count > 1 {
-                    HStack(spacing: 3) {
-                        Image(systemName: "square.split.2x1")
-                            .font(.system(size: 9, weight: .semibold))
-
-                        Text("\(tab.panes.count)")
-                            .font(.system(size: 10.5, weight: .medium))
-                    }
-                    .foregroundStyle(CardTheme.tertiaryText)
-                }
-
-                if tab.isPinned {
-                    Image(systemName: "pin.fill")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(CardTheme.lavender)
-                }
-            }
-        }
-        .padding(.horizontal, 8)
-        .frame(height: 26)
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .onTapGesture { chrome.select(tab: tab.id) }
-        .contextMenu { menu }
-        .draggable(CardChromeModel.dragItem(tab: tab.id))
     }
 
     @ViewBuilder
@@ -701,9 +668,9 @@ private struct TabCard: View {
         Divider()
 
         Button("Move Up") { chrome.move(tab: tab.id, to: group.index - 1) }
-            .disabled(group.index == 0)
+            .disabled(!tabs.indices.contains(group.index - 1) || tabs[group.index - 1].isPinned != tab.isPinned)
         Button("Move Down") { chrome.move(tab: tab.id, to: group.index + 1) }
-            .disabled(group.index == tabs.count - 1)
+            .disabled(group.index + 1 >= tabs.count || tabs[group.index + 1].isPinned != tab.isPinned)
         Button("Move to New Window") { chrome.moveToNewWindow(tab: tab.id) }
             .disabled(tabs.count < 2)
 
@@ -729,10 +696,11 @@ private struct TabCard: View {
     }
 }
 
-/// A small icon button that shows on hover in a row.
+/// A small icon button in the tab header.
 private struct CardIconButton: View {
     let symbol: String
     let help: String
+    var isOn = false
     let action: () -> Void
 
     @State private var hovering = false
@@ -740,8 +708,9 @@ private struct CardIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 9.5, weight: .semibold))
-                .foregroundStyle(hovering ? CardTheme.primaryText : CardTheme.tertiaryText)
+                .accessibilityLabel(help)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(isOn ? CardTheme.lavender : hovering ? CardTheme.primaryText : CardTheme.secondaryText)
                 .frame(width: 18, height: 18)
                 .background(Circle().fill(hovering ? CardTheme.activePill : .clear))
                 .contentShape(Circle())
@@ -752,72 +721,54 @@ private struct CardIconButton: View {
     }
 }
 
-/// "Archived            12 ›" at the bottom of the sidebar.
-private struct ShelfRow: View {
-    let section: SidebarSection
-    let count: Int
-    let isOpen: Bool
-    let toggle: () -> Void
-
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: toggle) {
-            HStack(spacing: 6) {
-                Text(section.title)
-                    .font(.system(size: 12))
-                    .foregroundStyle(CardTheme.secondaryText)
-
-                Spacer()
-
-                Text("\(count)")
-                    .font(.system(size: 11))
-                    .foregroundStyle(CardTheme.tertiaryText)
-
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(CardTheme.tertiaryText)
-                    .rotationEffect(.degrees(isOpen ? -90 : 0))
-            }
-            .padding(.horizontal, 10)
-            .frame(height: 30)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isOpen || hovering ? CardTheme.hoverPill : .clear)
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-    }
-}
-
 private struct TerminalRow: View {
     let entry: SidebarEntry
     @ObservedObject var chrome: CardChromeModel
-    var showsShortcut = true
 
     @State private var hovering = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 9) {
-            ProgramIcon(kind: entry.kind, size: 11)
-                .padding(.top, 1)
+        HStack(spacing: 4) {
+            Button(action: open) {
+                HStack(spacing: 8) {
+                    Image(systemName: entry.kind.symbol)
+                        .foregroundStyle(entry.kind.tint)
+                        .frame(width: 26, height: 28)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(entry.kind.tint.opacity(0.08)))
 
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(entry.title)
-                        .font(.system(size: 12.5, weight: entry.isFocused ? .medium : .regular))
-                        .foregroundStyle(entry.isFocused ? CardTheme.primaryText : CardTheme.secondaryText)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(entry.title)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(CardTheme.primaryText)
 
-                    Spacer(minLength: 4)
-
-                    StatusLabel(status: entry.status, closedAt: entry.closedAt)
+                        FolderLine(entry: entry)
+                    }
+                    .lineLimit(1)
                 }
-
-                FolderLine(entry: entry, showsShortcut: showsShortcut)
+                .contentShape(Rectangle())
             }
-            .lineLimit(1)
+            .buttonStyle(.plain)
+            .accessibilityHint(entry.record != nil ? "Reopen here" : entry.detached != nil ? "Attach to this tab" : "Focus pane")
+
+            if entry.status == .disconnected, let pane = entry.pane {
+                Button("Reconnect") { chrome.reconnect(pane: pane.id) }
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(CardTheme.warning)
+                    .buttonStyle(.plain)
+            } else if entry.detached != nil {
+                Button("Attach", action: open)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(CardTheme.lavender)
+                    .buttonStyle(.plain)
+            } else if let closed = entry.closedAt {
+                Text(Self.age(closed)).font(.caption2).foregroundStyle(.secondary)
+            }
+
+            Menu { menu } label: { Image(systemName: "ellipsis.circle") }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .accessibilityLabel("Terminal actions")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -828,7 +779,6 @@ private struct TerminalRow: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
-        .onTapGesture(perform: open)
         .contextMenu { menu }
         .draggable(ifLet: entry.pane.map { CardChromeModel.dragItem(pane: $0.id) })
         .help(entry.cwd ?? entry.title)
@@ -847,25 +797,8 @@ private struct TerminalRow: View {
             Button("Remove from History") { DrakoHistory.shared.remove(record.id) }
         } else if let detached = entry.detached {
             Button("Attach to This Tab") { chrome.attach(detached) }
-        } else if let pane = entry.pane {
-            let others = chrome.tabs.filter { $0.id != entry.tabID }
-
-            if !others.isEmpty {
-                Menu("Move to Tab") {
-                    ForEach(others) { tab in
-                        Button(tab.label) { chrome.move(pane: pane.id, to: tab.id) }
-                    }
-                }
-            }
-
-            if pane.host != nil {
-                Button("Move to New Tab") { chrome.moveToNewTab(pane: pane.id) }
-                Button("Detach") { chrome.detach(pane: pane.id) }
-            }
-
-            Divider()
-
-            Button("Close") { chrome.close(pane: pane.id) }
+        } else if let pane = entry.pane, let tab = entry.tabID {
+            CardPaneActions(pane: pane, tab: tab, chrome: chrome)
         }
     }
 
@@ -883,23 +816,6 @@ private struct TerminalRow: View {
         guard let pane = entry.pane, let tabID = entry.tabID else { return }
 
         chrome.focus(pane: pane.id, in: tabID)
-    }
-}
-
-/// "⚡ Working", or "Closed · 5m" for the history.
-private struct StatusLabel: View {
-    let status: SidebarStatus
-    let closedAt: Date?
-
-    var body: some View {
-        HStack(spacing: 3) {
-            Image(systemName: status.symbol)
-                .font(.system(size: 8.5, weight: .semibold))
-
-            Text(closedAt.map(Self.age) ?? status.label)
-                .font(.system(size: 10.5, weight: .medium))
-        }
-        .foregroundStyle(status.color)
     }
 
     /// "now", "5m", "3h", "2d", like T3 Code's compact relative times.
@@ -920,7 +836,6 @@ private struct StatusLabel: View {
 /// machine for remote terminals and the tab shortcut.
 private struct FolderLine: View {
     let entry: SidebarEntry
-    var showsShortcut = true
 
     var body: some View {
         HStack(spacing: 5) {
@@ -936,7 +851,7 @@ private struct FolderLine: View {
 
                 if let branch = git.branch {
                     Text(branch)
-                        .foregroundStyle(CardTheme.tertiaryText.opacity(0.8))
+                        .foregroundStyle(CardTheme.secondaryText)
                         .truncationMode(.middle)
                 }
             } else if let project = entry.project {
@@ -948,12 +863,12 @@ private struct FolderLine: View {
 
             Spacer(minLength: 4)
 
-            if showsShortcut, let index = entry.tabIndex, index < 9 {
+            if entry.status != .disconnected, let index = entry.tabIndex, index < 9 {
                 Text("⌘\(index + 1)")
             }
         }
         .font(.system(size: 10.5))
-        .foregroundStyle(CardTheme.tertiaryText)
+        .foregroundStyle(CardTheme.secondaryText)
     }
 }
 

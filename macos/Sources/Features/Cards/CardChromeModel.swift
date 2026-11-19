@@ -11,6 +11,7 @@ struct CardTabInfo: Equatable, Identifiable {
     let isPinned: Bool
     let focusedPane: PaneInfo?
     let panes: [PaneInfo]
+    let paneFrames: [UUID: CGRect]
 
     var label: String {
         title ?? focusedPane?.shortLabel ?? "Terminal"
@@ -48,10 +49,6 @@ final class CardWorkspace: ObservableObject {
     @Published private(set) var tabs: [CardTabInfo] = []
 
     @Published private(set) var detached: [DetachedTerminal] = []
-
-    /// Pinned tabs, kept first in the tab bar and the sidebar.
-    // shortcut: pins last for the session only; persist them with the drako tab key when restore needs them.
-    @Published private(set) var pinned: Set<ObjectIdentifier> = []
 
     private var isRefreshScheduled = false
     private var cancellables: Set<AnyCancellable> = []
@@ -94,25 +91,8 @@ final class CardWorkspace: ObservableObject {
         }
     }
 
-    func setPinned(_ id: ObjectIdentifier, _ isPinned: Bool) {
-        if isPinned {
-            pinned.insert(id)
-        } else {
-            pinned.remove(id)
-        }
-
-        setNeedsRefresh()
-    }
-
     func refresh() {
-        let controllers = DrakoStore.orderedTabs
-        let live = Set(controllers.compactMap { $0.window.map(ObjectIdentifier.init) })
-
-        if !pinned.isSubset(of: live) {
-            pinned.formIntersection(live)
-        }
-
-        let newTabs = controllers.compactMap { Self.info(of: $0, pinned: pinned) }
+        let newTabs = DrakoStore.orderedTabs.compactMap(Self.info(of:))
 
         if newTabs != tabs {
             tabs = newTabs
@@ -132,20 +112,30 @@ final class CardWorkspace: ObservableObject {
         DrakoStore.shared.saveWorkspace()
     }
 
-    private static func info(of controller: TerminalController, pinned: Set<ObjectIdentifier>) -> CardTabInfo? {
+    private static func info(of controller: TerminalController) -> CardTabInfo? {
         guard let window = controller.window else { return nil }
 
         let panes = controller.surfaceTree.map { PaneInfo.make($0) }
         let focused = controller.focusedSurface.flatMap { view in panes.first { $0.id == view.id } }
+
+        let slots = controller.surfaceTree.root?.spatial(within: CGSize(width: 1, height: 1)).slots ?? []
+        var frames: [UUID: CGRect] = [:]
+
+        for slot in slots {
+            if case .leaf(let view) = slot.node {
+                frames[view.id] = slot.bounds
+            }
+        }
 
         return CardTabInfo(
             id: ObjectIdentifier(window),
             groupID: window.cardGroupID,
             title: controller.titleOverride,
             isSelected: (window.tabGroup?.selectedWindow ?? window) === window,
-            isPinned: pinned.contains(ObjectIdentifier(window)),
+            isPinned: controller.isTabPinned,
             focusedPane: focused ?? panes.first,
-            panes: panes)
+            panes: panes,
+            paneFrames: frames)
     }
 }
 
@@ -232,7 +222,8 @@ final class CardChromeModel: ObservableObject {
 
         let pinnedCount = tabs.filter(\.isPinned).count
 
-        workspace.setPinned(id, !tab.isPinned)
+        controller(for: id)?.isTabPinned = !tab.isPinned
+        refresh()
         move(tab: id, to: tab.isPinned ? pinnedCount - 1 : pinnedCount)
     }
 
@@ -261,6 +252,21 @@ final class CardChromeModel: ObservableObject {
         _ = controller(for: tab)?.focusedSurface?.surfaceModel?.perform(action: action)
     }
 
+    func arrange(tab id: ObjectIdentifier, as layout: CardLayout) {
+        guard let target = controller(for: id), target.surfaceTree.isSplit else { return }
+
+        let tree = target.surfaceTree.arranged(as: layout, mainPane: target.focusedSurface)
+
+        guard tree.root != target.surfaceTree.root || target.surfaceTree.isZoomed else { return }
+
+        target.replaceSurfaceTree(
+            tree,
+            moveFocusTo: target.focusedSurface,
+            moveFocusFrom: target.focusedSurface,
+            undoAction: "Arrange Panes")
+        refresh()
+    }
+
     // MARK: Panes
 
     func focus(pane id: UUID, in tab: ObjectIdentifier) {
@@ -270,7 +276,19 @@ final class CardChromeModel: ObservableObject {
         else { return }
 
         target.tabGroup?.selectedWindow = target
+
+        if let zoomed = tabController.surfaceTree.zoomed, zoomed.node(view: view) == nil {
+            tabController.surfaceTree = SplitTree(root: tabController.surfaceTree.root, zoomed: nil)
+        }
+
         tabController.focusSurface(view)
+        refresh()
+    }
+
+    func reconnect(pane id: UUID) {
+        guard let view = Ghostty.SurfaceView.find(uuid: id), PaneInfo.make(view).isDisconnected else { return }
+
+        view.surfaceModel?.sendText("\r")
         refresh()
     }
 
@@ -332,11 +350,20 @@ final class CardChromeModel: ObservableObject {
 
     /// A pane dropped on a tab joins it; a tab dropped on a tab takes its
     /// place and its pin.
-    func drop(_ item: String, on target: ObjectIdentifier) -> Bool {
+    func drop(_ item: String, on target: ObjectIdentifier, beside anchorID: UUID? = nil) -> Bool {
         if item.hasPrefix(Self.panePrefix) {
-            guard let id = UUID(uuidString: String(item.dropFirst(Self.panePrefix.count))) else { return false }
+            guard let id = UUID(uuidString: String(item.dropFirst(Self.panePrefix.count))),
+                  id != anchorID,
+                  let view = Ghostty.SurfaceView.find(uuid: id),
+                  let destination = controller(for: target)
+            else { return false }
 
-            move(pane: id, to: target)
+            let anchor = anchorID.flatMap { id in destination.surfaceTree.first { $0.id == id } }
+
+            guard anchor != nil || !destination.surfaceTree.contains(view) else { return false }
+
+            DrakoStore.shared.move(view, to: destination, beside: anchor)
+            refresh()
             return true
         }
 
@@ -349,7 +376,8 @@ final class CardChromeModel: ObservableObject {
               let index = tabs.firstIndex(where: { $0.id == target })
         else { return false }
 
-        workspace.setPinned(source.id, tabs[index].isPinned)
+        controller(for: source.id)?.isTabPinned = tabs[index].isPinned
+        refresh()
         move(tab: source.id, to: index)
         return true
     }

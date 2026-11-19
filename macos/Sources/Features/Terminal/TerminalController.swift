@@ -33,6 +33,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     /// early if we don't care.
     private var tabListenForFrame: Bool = false
 
+    /// Saved with the split layout of a Drako tab.
+    var isTabPinned = false
+
     /// This is the hash value of the last tabGroup.windows array. We use this to detect order
     /// changes in the list.
     private var tabWindowsHash: Int = 0

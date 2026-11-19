@@ -396,6 +396,7 @@ final class DrakoStore: ObservableObject {
             workspace.tabs.append(DrakoWorkspace.Tab(
                 key: tabKey(of: controller),
                 title: controller.titleOverride,
+                isPinned: controller.isTabPinned ? true : nil,
                 layout: layout))
         }
 
@@ -503,6 +504,7 @@ final class DrakoStore: ObservableObject {
         else { return nil }
 
         tabKeys.setObject(tab.key as NSString, forKey: controller)
+        controller.isTabPinned = tab.isPinned ?? false
         controller.titleOverride = tab.title
         panes.setObject(PaneBox(first), forKey: firstView)
 
