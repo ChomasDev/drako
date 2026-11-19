@@ -2,8 +2,7 @@ import AppKit
 
 /// Drako "card" window style.
 ///
-/// The sidebar manages native window tabs. Hiding AppKit's titlebar lets the
-/// terminal and sidebar extend to both vertical edges.
+/// The sidebar manages native window tabs. The card layout draws the window controls.
 class CardTerminalWindow: TerminalWindow {
     override var supportsUpdateAccessory: Bool { false }
 
@@ -28,29 +27,15 @@ class CardTerminalWindow: TerminalWindow {
         NotificationCenter.default.removeObserver(self)
     }
 
-    private static let cardStyleMask: NSWindow.StyleMask = [
-        .titled,
-        .fullSizeContentView,
-        .resizable,
-        .closable,
-        .miniaturizable,
-    ]
-
-    /// Hide the native titlebar container (title, traffic lights and tab bar).
-    /// AppKit likes to bring pieces of it back, so this is idempotent and called
-    /// often.
-    func reapplyCardStyle() {
-        if terminalController?.fullscreenStyle?.isFullscreen ?? false {
-            return
-        }
-
-        let mask = styleMask.contains(.fullScreen)
-            ? Self.cardStyleMask.union([.fullScreen])
-            : Self.cardStyleMask
-        if styleMask != mask { styleMask = mask }
-
+    private func reapplyCardStyle() {
+        styleMask.insert(.fullSizeContentView)
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
+        hideNativeTitlebar()
+    }
+
+    private func hideNativeTitlebar() {
+        guard terminalController?.fullscreenStyle?.isFullscreen != true else { return }
 
         guard let themeFrame = contentView?.superview else { return }
 
@@ -70,33 +55,20 @@ class CardTerminalWindow: TerminalWindow {
     // MARK: NSWindow
 
     override var title: String {
-        didSet { reapplyCardStyle() }
+        didSet { hideNativeTitlebar() }
     }
 
     override func addTitlebarAccessoryViewController(_ childViewController: NSTitlebarAccessoryViewController) {
         super.addTitlebarAccessoryViewController(childViewController)
-        DispatchQueue.main.async { [weak self] in self?.reapplyCardStyle() }
+        DispatchQueue.main.async { [weak self] in self?.hideNativeTitlebar() }
     }
 
     override func becomeKey() {
         super.becomeKey()
-        reapplyCardStyle()
+        hideNativeTitlebar()
     }
 
-    override func makeKeyAndOrderFront(_ sender: Any?) {
-        super.makeKeyAndOrderFront(sender)
-
-        // Native tab selection can order the group out later in the same turn.
-        // Reveal it once AppKit has finished switching, unless it was closed.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.isVisible,
-                  (self.tabGroup?.selectedWindow ?? self) === self else { return }
-
-            self.orderFrontRegardless()
-        }
-    }
-
-    // The whole window is content; the sidebar handles dragging.
+    // The whole window is content; the compact header handles dragging.
     override var contentLayoutRect: CGRect {
         var rect = super.contentLayoutRect
         rect.origin.y = 0

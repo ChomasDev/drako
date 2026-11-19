@@ -1,6 +1,25 @@
 import AppKit
 import SwiftUI
 
+struct CardSidebarToggle: View {
+    let isExpanded: Bool
+
+    var body: some View {
+        let label = isExpanded ? "Hide Sidebar" : "Show Sidebar"
+
+        Button(action: CardChromeModel.toggleSidebar) {
+            Image(systemName: "sidebar.left")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(CardTheme.secondaryText)
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .help("\(label) (⌘⇧S)")
+    }
+}
+
 /// Standard window buttons for the full-height card window.
 struct TrafficLights: NSViewRepresentable {
     func makeNSView(context: Context) -> TrafficLightsView { TrafficLightsView() }

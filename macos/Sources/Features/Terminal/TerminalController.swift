@@ -610,6 +610,10 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
     }
 
     private func fixTabBar() {
+        // Card windows hide the native tab bar. Toggling opacity during a window
+        // switch would unnecessarily invalidate their WindowServer thumbnails.
+        guard !(window is CardTerminalWindow) else { return }
+
         // We do this to make sure that the tab bar will always re-composite. If we don't,
         // then the it will "drag" pieces of the background with it when a transparent
         // window is moved around.

@@ -448,15 +448,6 @@ class AppDelegate: NSObject,
     /// This is called when the application is already open and someone double-clicks the icon
     /// or clicks the dock icon.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        // A card tab can still be "visible" to AppKit while its group is on
-        // another Space. Explicitly reveal the selected tab on a Dock click.
-        if let window = TerminalController.preferredParent?.window as? CardTerminalWindow {
-            let selected = window.tabGroup?.selectedWindow ?? window
-            selected.deminiaturize(nil)
-            selected.makeKeyAndOrderFront(nil)
-            return false
-        }
-
         // If we have visible windows then we allow macOS to do its default behavior
         // of focusing one of them.
         guard !flag else { return true }

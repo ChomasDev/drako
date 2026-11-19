@@ -22,17 +22,7 @@ struct CardSidebarView: View {
         let disconnected = visible.filter { $0.status == .disconnected }
 
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 0) {
-                TrafficLights()
-                    .frame(width: 56, height: 16)
-                    .padding(.leading, 4)
-
-                WindowDragArea()
-                    .frame(width: 30)
-
-                SidebarHostsButton(chrome: chrome)
-            }
-            .frame(height: 36)
+            SidebarHostsButton(chrome: chrome)
 
             HStack(spacing: 3) {
                 modeButton("Layouts", symbol: "rectangle.split.2x1", activity: false, count: chrome.tabs.count)

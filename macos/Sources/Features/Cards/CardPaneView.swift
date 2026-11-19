@@ -321,14 +321,12 @@ private struct PaneButton: View {
     }
 }
 
-/// The sidebar and terminal share the full height of the window.
+/// The compact header sits above the terminal and sidebar.
 struct CardWindowLayout<Content: View>: View {
     @ObservedObject var chrome: CardChromeModel
     let content: Content
 
     @AppStorage(CardChromeModel.sidebarKey) private var sidebarVisible = true
-    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
-    @State private var hoveringControls = false
 
     init(chrome: CardChromeModel, @ViewBuilder content: () -> Content) {
         self.chrome = chrome
@@ -336,34 +334,29 @@ struct CardWindowLayout<Content: View>: View {
     }
 
     var body: some View {
-        HStack(spacing: CardTheme.gap) {
-            if sidebarVisible {
-                CardSidebarView(chrome: chrome)
-            }
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                TrafficLights()
+                    .frame(width: 56, height: 16)
 
-            content
-                .environment(\.cardStyle, true)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .overlay(alignment: .topLeading) {
-            if !sidebarVisible && (hoveringControls || voiceOverEnabled) {
-                HStack(spacing: 0) {
-                    TrafficLights()
-                        .frame(width: 56, height: 16)
-                    WindowDragArea()
+                CardSidebarToggle(isExpanded: sidebarVisible)
+
+                WindowDragArea()
+            }
+            .padding(.leading, 6)
+            .frame(height: CardTheme.headerHeight)
+
+            HStack(spacing: CardTheme.gap) {
+                if sidebarVisible {
+                    CardSidebarView(chrome: chrome)
                 }
-                .padding(.leading, 10)
-                .frame(width: 96, height: 32)
-                .background(.regularMaterial, in: Capsule())
+
+                content
+                    .environment(\.cardStyle, true)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .onContinuousHover { phase in
-            if !sidebarVisible, case .active(let point) = phase {
-                hoveringControls = CGRect(x: 0, y: 0, width: 96, height: 32).contains(point)
-            } else if hoveringControls {
-                hoveringControls = false
-            }
-        }
+        .padding([.horizontal, .bottom], CardTheme.windowInset)
         .background(CardTheme.backdrop)
         .ignoresSafeArea()
         .onAppear { chrome.refresh() }

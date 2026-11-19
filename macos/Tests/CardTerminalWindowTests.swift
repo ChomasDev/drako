@@ -4,7 +4,7 @@ import Testing
 
 struct CardTerminalWindowTests {
     @Test @MainActor
-    func revealsSelectedTabAfterAppKitFinishesSwitching() async {
+    func selectedTabStaysVisibleWithoutForcingWindowOrder() async {
         let first = makeWindow()
         let second = makeWindow()
         defer {
@@ -21,7 +21,7 @@ struct CardTerminalWindowTests {
         }
 
         #expect((second.tabGroup?.selectedWindow ?? second) === second)
-        #expect(second.revealCount > revealCount)
+        #expect(second.revealCount == revealCount)
         #expect(second.isVisible)
     }
 

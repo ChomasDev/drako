@@ -6,6 +6,10 @@ import SwiftUI
 enum CardTheme {
     // MARK: Metrics
 
+    /// The native window buttons share this strip with the sidebar toggle.
+    static let headerHeight: CGFloat = 24
+    static let windowInset: CGFloat = 6
+
     /// Gap between adjacent panes and the sidebar.
     static let gap: CGFloat = 10
 
