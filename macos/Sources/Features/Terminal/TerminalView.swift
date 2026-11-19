@@ -48,7 +48,7 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
     weak var delegate: (any TerminalViewDelegate)?
 
     // Drako: when set, the view is rendered with the card window chrome
-    // (custom titlebar with tabs, sidebar, panes as cards).
+    // (full-height sidebar and panes as cards).
     var cardChrome: CardChromeModel?
 
     /// The most recently focused surface, equal to `focusedSurface` when it is non-nil.

@@ -2,11 +2,8 @@ import AppKit
 
 /// Drako "card" window style.
 ///
-/// The native titlebar (including the native tab bar) is hidden entirely and the
-/// SwiftUI `CardWindowLayout` draws its own titlebar with real traffic lights, a
-/// tab strip and the split panes as cards. Native window tabbing stays enabled:
-/// every tab is still an NSWindow in an NSWindowTabGroup, we only render it
-/// differently.
+/// The sidebar manages native window tabs. Hiding AppKit's titlebar lets the
+/// terminal and sidebar extend to both vertical edges.
 class CardTerminalWindow: TerminalWindow {
     override var supportsUpdateAccessory: Bool { false }
 
@@ -99,7 +96,7 @@ class CardTerminalWindow: TerminalWindow {
         }
     }
 
-    // The whole window is content; our SwiftUI titlebar handles dragging.
+    // The whole window is content; the sidebar handles dragging.
     override var contentLayoutRect: CGRect {
         var rect = super.contentLayoutRect
         rect.origin.y = 0
@@ -110,8 +107,7 @@ class CardTerminalWindow: TerminalWindow {
     // MARK: Notifications
 
     /// In native fullscreen AppKit moves the (hidden) titlebar into a child
-    /// window over the top of the screen, which would swallow clicks on our
-    /// titlebar: traffic lights and tabs.
+    /// window over the top of the screen, which would swallow clicks at the top of the workspace.
     @objc private func didEnterNativeFullScreen() {
         for child in childWindows ?? [] where child.className == "NSToolbarFullScreenWindow" {
             child.ignoresMouseEvents = true

@@ -22,6 +22,18 @@ struct CardSidebarView: View {
         let disconnected = visible.filter { $0.status == .disconnected }
 
         VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 0) {
+                TrafficLights()
+                    .frame(width: 56, height: 16)
+                    .padding(.leading, 4)
+
+                WindowDragArea()
+                    .frame(width: 30)
+
+                SidebarHostsButton(chrome: chrome)
+            }
+            .frame(height: 36)
+
             HStack(spacing: 3) {
                 modeButton("Layouts", symbol: "rectangle.split.2x1", activity: false, count: chrome.tabs.count)
                 modeButton("Activity", symbol: "waveform.path.ecg", activity: true,
@@ -352,83 +364,37 @@ private struct SidebarEntry: Identifiable, Equatable {
     }
 }
 
-// MARK: Header
-
-/// "+ New Tab" and the machine it opens on.
+/// Opens a tab on the same machine as the New Tab keyboard shortcut.
 private struct NewTabBar: View {
     @ObservedObject var chrome: CardChromeModel
-
     @ObservedObject private var drako = DrakoStore.shared
 
-    @State private var host: DrakoHost?
-    @State private var hovering = false
-
     var body: some View {
-        let host = host ?? drako.lastHost
+        Button {
+            chrome.newTab(on: drako.lastHost)
+        } label: {
+            HStack(spacing: 7) {
+                Label("New Tab", systemImage: "plus")
+                    .font(.system(size: 12.5, weight: .medium))
 
-        HStack(spacing: 6) {
-            Button {
-                chrome.newTab(on: host)
-            } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 11, weight: .semibold))
+                Spacer(minLength: 4)
 
-                    Text("New Tab")
-                        .font(.system(size: 12.5, weight: .medium))
+                Text(drako.lastHost.name)
+                    .font(.system(size: 11))
+                    .foregroundStyle(CardTheme.secondaryText)
+                    .lineLimit(1)
 
-                    Spacer(minLength: 4)
-
-                    Text("⌘T")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(CardTheme.tertiaryText)
-                }
-                .foregroundStyle(CardTheme.primaryText)
-                .padding(.horizontal, 12)
-                .frame(height: 32)
-                .background(Capsule().fill(hovering ? CardTheme.selectedTab : CardTheme.activePill))
-                .contentShape(Capsule())
+                Text("⌘T")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(CardTheme.tertiaryText)
             }
-            .buttonStyle(.plain)
-            .onHover { hovering = $0 }
-
-            Menu {
-                ForEach(drako.hosts) { candidate in
-                    Button {
-                        self.host = candidate
-                    } label: {
-                        Text("\(candidate.name) · \(HostStatusText.detail(host: candidate, state: drako.state(of: candidate)))")
-                    }
-                    .disabled(drako.state(of: candidate).reachability == .unreachable)
-                }
-
-                Divider()
-
-                Button("Manage machines…") { HostsEditor.show() }
-            } label: {
-                HStack(spacing: 5) {
-                    StatusDot(reachability: drako.state(of: host).reachability)
-
-                    Text(host.name)
-                        .font(.system(size: 11.5))
-                        .lineLimit(1)
-
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 7, weight: .bold))
-                }
-                .foregroundStyle(CardTheme.secondaryText)
-                .padding(.horizontal, 10)
-                .frame(height: 32)
-                .background(Capsule().fill(CardTheme.hoverPill))
-                .contentShape(Capsule())
-            }
-            // Button style keeps our label as drawn; borderless menus flatten it to text.
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Machine for new tabs")
+            .foregroundStyle(CardTheme.primaryText)
+            .padding(.horizontal, 12)
+            .frame(height: 32)
+            .background(Capsule().fill(CardTheme.activePill))
+            .contentShape(Capsule())
         }
+        .buttonStyle(.plain)
     }
 }
 

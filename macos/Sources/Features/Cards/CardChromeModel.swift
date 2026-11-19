@@ -2,7 +2,7 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// Snapshot of one tab (one NSWindow in a tab group) for the tab strip and the sidebar.
+/// Snapshot of a native tab for the sidebar.
 struct CardTabInfo: Equatable, Identifiable {
     let id: ObjectIdentifier
     let groupID: ObjectIdentifier
@@ -17,16 +17,6 @@ struct CardTabInfo: Equatable, Identifiable {
         title ?? focusedPane?.shortLabel ?? "Terminal"
     }
 
-    /// The remote machines this tab has panes on, without duplicates.
-    var remoteHosts: [DrakoHost] {
-        var hosts: [DrakoHost] = []
-
-        for host in panes.compactMap(\.host) where !host.isLocal && !hosts.contains(host) {
-            hosts.append(host)
-        }
-
-        return hosts
-    }
 }
 
 /// A live drako terminal that no pane shows.
@@ -140,7 +130,7 @@ final class CardWorkspace: ObservableObject {
 }
 
 /// Per-window handle on `CardWorkspace`: the tabs of this window's tab group
-/// and the actions its titlebar and sidebar perform.
+/// and the actions available in its sidebar.
 @MainActor
 final class CardChromeModel: ObservableObject {
     /// UserDefaults key for the (app-wide) sidebar visibility. Views observe it

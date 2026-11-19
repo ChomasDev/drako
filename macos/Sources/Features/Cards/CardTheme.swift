@@ -6,10 +6,7 @@ import SwiftUI
 enum CardTheme {
     // MARK: Metrics
 
-    /// Height of the custom titlebar row (traffic lights, host, tabs).
-    static let titlebarHeight: CGFloat = 54
-
-    /// Gap between cards and between cards and the window edges.
+    /// Gap between adjacent panes and the sidebar.
     static let gap: CGFloat = 10
 
     /// Corner radius of each pane card.
@@ -17,9 +14,6 @@ enum CardTheme {
 
     /// Width of the sidebar.
     static let sidebarWidth: CGFloat = 264
-
-    /// Space reserved on the left of the titlebar for the traffic lights.
-    static let trafficLightsWidth: CGFloat = 78
 
     // MARK: Colors
 
@@ -90,23 +84,6 @@ struct CardGlassBackground: View {
             }
             .shadow(color: CardTheme.cardShadow, radius: 10, y: 3)
             .allowsHitTesting(false)
-    }
-}
-
-/// A round Liquid Glass button face for the titlebar.
-struct GlassCircleIcon: View {
-    let symbol: String
-    var isOn = false
-    var isHovered = false
-
-    var body: some View {
-        Image(systemName: symbol)
-            .font(.system(size: 12.5, weight: .medium))
-            .foregroundStyle(isOn || isHovered ? CardTheme.primaryText : CardTheme.secondaryText)
-            .frame(width: 34, height: 34)
-            .background(Circle().fill(isOn ? CardTheme.activePill : .clear))
-            .contentShape(Circle())
-            .cardGlass(in: Circle())
     }
 }
 
