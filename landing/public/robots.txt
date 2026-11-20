@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://drako.dev/sitemap.xml
+Sitemap: https://drako-3of.pages.dev/sitemap.xml
