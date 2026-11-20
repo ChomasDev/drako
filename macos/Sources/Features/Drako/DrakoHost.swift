@@ -58,12 +58,16 @@ struct DrakoHost: Hashable, Identifiable, Codable {
         let config = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssh/config")
         let text = (try? String(contentsOf: config, encoding: .utf8)) ?? ""
 
-        return text
+        // Typed steps: as one chain it is too slow for the type checker.
+        let lines: [[Substring]] = text
             .split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces).split(whereSeparator: \.isWhitespace) }
+
+        let aliases: [String] = lines
             .filter { $0.first?.lowercased() == "host" }
             .flatMap { $0.dropFirst().map(String.init) }
-            .filter(isValidTarget)
+
+        return aliases.filter(isValidTarget)
     }
 
     private static func createHostsFile() {
