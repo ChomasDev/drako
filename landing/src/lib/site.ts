@@ -1,5 +1,5 @@
-// shortcut: placeholder domain from the bundle id (dev.drako), set the real one before deploying.
-export const SITE_URL = 'https://drako.dev'
+// Cloudflare Pages address (drako.pages.dev was taken); swap it for a custom domain later.
+export const SITE_URL = 'https://drako-3of.pages.dev'
 
 export const SITE_NAME = 'Drako'
 
