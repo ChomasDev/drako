@@ -38,7 +38,10 @@ jobs:
           version: 0.17.1
 
       - name: Xcode
-        run: sudo xcode-select -s "$(ls -d /Applications/Xcode_27*.app | sort -V | tail -1)"
+        run: |
+          ls -d /Applications/Xcode*.app
+          sudo xcode-select -s "$(find /Applications -maxdepth 1 -name 'Xcode_*.app' | sort -V | tail -1)"
+          xcodebuild -version
 
       - name: Sparkle tools
         run: |
